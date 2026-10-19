@@ -1,0 +1,99 @@
+# Codemagic CI/CD 設定 (ぽちっと世界の国 / Capacitor 7)
+# Macなしでクラウド上のMacでiOSビルド〜App Store Connectアップロードまで行う。
+#
+# ★ビルド前に埋める値 (konishiさんの作業。詳細は SETUP.md)
+#   APP_APPLE_ID    : App Store Connect でアプリを新規作成したときに発行される数字
+#   ADMOB_APP_ID    : AdMob で iOS アプリを登録したときの ca-app-pub-XXXX~YYYY
+#
+# ★Codemagicで「Start new build」を押す前に必ず ?app_id= でアプリを絞り込むこと
+#   (2026-09-04 に GRID HUNTER のビルドを誤爆した教訓)
+workflows:
+  ios-release:
+    name: iOS Release (App Store)
+    max_build_duration: 45
+    integrations:
+      app_store_connect: codemagic
+    environment:
+      node: 20
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.konishi.pochittosekai
+      vars:
+        APP_APPLE_ID: "6824358920"
+        ADMOB_APP_ID: "ca-app-pub-7792368657314009~3138669697"
+        MARKETING_VERSION: "1.0.0"
+    scripts:
+      - name: npmパッケージ取得
+        script: npm install
+      - name: iOSプラットフォーム生成
+        script: npx cap add ios
+      - name: アイコンとスプラッシュ生成
+        script: npx @capacitor/assets generate --ios --iconBackgroundColor '#f2f5f8' --splashBackgroundColor '#f2f5f8'
+      - name: Capacitor同期
+        script: npx cap sync ios
+      - name: Firebase Analytics の設定(継続率D1/D7の計測。2026-10-19 追加)
+        script: |
+          # 1) Firebaseの設定ファイルをアプリに入れる(リポジトリの firebase/ に置いたもの)
+          if [ ! -f firebase/GoogleService-Info.plist ]; then
+            echo "firebase/GoogleService-Info.plist がありません。Firebaseコンソールからダウンロードして置いてください"; exit 1
+          fi
+          cp firebase/GoogleService-Info.plist ios/App/App/GoogleService-Info.plist
+          ruby -e '
+            require "xcodeproj"
+            p = Xcodeproj::Project.open("ios/App/App.xcodeproj")
+            t = p.targets.find { |x| x.name == "App" }
+            g = p.main_group["App"]
+            f = g.files.find { |x| x.path == "GoogleService-Info.plist" } || g.new_reference("GoogleService-Info.plist")
+            t.add_resources([f]) unless t.resources_build_phase.files_references.include?(f)
+            p.save
+          '
+          # 2) Firebase本体を入れる。プラグインの既定(Lite)はSDKが入らないので、IDFAなし版のサブスペックを追加
+          #    IDFAはAdMobがATTで扱うので、Firebase側では使わない
+          python3 - <<'PY'
+          p = 'ios/App/Podfile'
+          s = open(p).read()
+          line = "  pod 'CapacitorFirebaseAnalytics/AnalyticsWithoutAdIdSupport', :path => '../../node_modules/@capacitor-firebase/analytics'"
+          assert '# Add your Pods here' in s, 'Podfile に目印がありません'
+          if line not in s:
+              s = s.replace('# Add your Pods here', '# Add your Pods here\n' + line, 1)
+          open(p, 'w').write(s)
+          PY
+          grep -n "CapacitorFirebaseAnalytics" ios/App/Podfile
+      - name: 最低対応OSを iOS 15 に(2027年春からAppleが15.0以上を必須化)
+        script: |
+          cd ios/App
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' App.xcodeproj/project.pbxproj
+          sed -i '' "s/platform :ios, '[0-9.]*'/platform :ios, '15.0'/" Podfile
+          pod install
+      - name: Info.plist調整(暗号化申告・縦画面固定・AdMob/ATT)
+        script: |
+          PLIST=ios/App/App/Info.plist
+          plutil -replace ITSAppUsesNonExemptEncryption -bool NO "$PLIST"
+          # 縦画面固定。iPad も縦のみ + フルスクリーン必須(未設定だとアップロードエラー 90474)
+          plutil -replace UISupportedInterfaceOrientations -json '["UIInterfaceOrientationPortrait"]' "$PLIST"
+          plutil -replace "UISupportedInterfaceOrientations~ipad" -json '["UIInterfaceOrientationPortrait","UIInterfaceOrientationPortraitUpsideDown"]' "$PLIST"
+          plutil -replace UIRequiresFullScreen -bool YES "$PLIST"
+          plutil -replace CFBundleDisplayName -string "ぽちっと世界の国" "$PLIST"
+          plutil -replace GADApplicationIdentifier -string "$ADMOB_APP_ID" "$PLIST"
+          plutil -replace NSUserTrackingUsageDescription -string "広告をあなたに関連性の高い内容にするために使用します。許可しなくてもアプリはすべて無料で遊べます。" "$PLIST"
+          plutil -replace SKAdNetworkItems -json '[{"SKAdNetworkIdentifier":"cstr6suwn9.skadnetwork"}]' "$PLIST"
+      - name: ビルド番号を自動採番
+        script: |
+          cd ios/App
+          BUILD_NUMBER=$(($(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID" 2>/dev/null || echo 0) + 1))
+          agvtool new-version -all $BUILD_NUMBER
+          agvtool new-marketing-version "$MARKETING_VERSION"
+      - name: 署名設定を適用
+        script: xcode-project use-profiles
+      - name: IPAをビルド
+        script: xcode-project build-ipa --workspace ios/App/App.xcworkspace --scheme App
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        # TestFlight外部テスト提出は行わない(App Store審査用のアップロードのみ)
+        submit_to_testflight: false
