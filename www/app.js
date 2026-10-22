@@ -102,10 +102,10 @@ var App = (function () {
   function screen() { return { w: window.innerWidth, h: window.innerHeight }; }
   function applyView() {
     cam.setAttribute('transform', 'translate(' + view.x.toFixed(1) + ',' + view.y.toFixed(1) + ') scale(' + view.k.toFixed(4) + ')');
-    var r = 6 / view.k;
+    var r = Math.min(6, 3 + 3 * (view.k / kMin - 1) / 4) / view.k;  // 世界全体では小さく、拡大すると見やすく
     for (var id in shapes) if (shapes[id].tagName === 'circle') shapes[id].setAttribute('r', r.toFixed(3));
-    var fs = 12 / view.k;
-    for (var i = 0; i < labels.childNodes.length; i++) { var t = labels.childNodes[i]; t.setAttribute('font-size', fs.toFixed(3)); t.style.strokeWidth = (3 / view.k) + 'px'; }
+    var fs = 14 / view.k;
+    for (var i = 0; i < labels.childNodes.length; i++) { var t = labels.childNodes[i]; t.style.fontSize = fs.toFixed(3) + 'px'; t.style.strokeWidth = (3 / view.k) + 'px'; }
   }
   function clampView() {
     var s = screen(), w = MAP_W * view.k, h = MAP_H * view.k;
