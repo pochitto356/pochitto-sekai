@@ -1,4 +1,4 @@
-# Codemagic CI/CD 設定 (ぽちっと世界の国 / Capacitor 7)
+# Codemagic CI/CD 設定 (せかいタッチ（旧 ぽちっと世界の国） / Capacitor 7)
 # Macなしでクラウド上のMacでiOSビルド〜App Store Connectアップロードまで行う。
 #
 # ★ビルド前に埋める値 (konishiさんの作業。詳細は SETUP.md)
@@ -30,7 +30,7 @@ workflows:
       - name: iOSプラットフォーム生成
         script: npx cap add ios
       - name: アイコンとスプラッシュ生成
-        script: npx @capacitor/assets generate --ios --iconBackgroundColor '#f2f5f8' --splashBackgroundColor '#f2f5f8'
+        script: npx @capacitor/assets generate --ios --iconBackgroundColor '#cfe6f3' --splashBackgroundColor '#cfe6f3'
       - name: Capacitor同期
         script: npx cap sync ios
       - name: Firebase Analytics の設定(継続率D1/D7の計測。2026-10-19 追加)
@@ -58,7 +58,7 @@ workflows:
           assert '# Add your Pods here' in s, 'Podfile に目印がありません'
           if line not in s:
               s = s.replace('# Add your Pods here', '# Add your Pods here\n' + line, 1)
-          open(p, 'w').write(s)
+              open(p, 'w').write(s)
           PY
           grep -n "CapacitorFirebaseAnalytics" ios/App/Podfile
       - name: 最低対応OSを iOS 15 に(2027年春からAppleが15.0以上を必須化)
@@ -75,9 +75,9 @@ workflows:
           plutil -replace UISupportedInterfaceOrientations -json '["UIInterfaceOrientationPortrait"]' "$PLIST"
           plutil -replace "UISupportedInterfaceOrientations~ipad" -json '["UIInterfaceOrientationPortrait","UIInterfaceOrientationPortraitUpsideDown"]' "$PLIST"
           plutil -replace UIRequiresFullScreen -bool YES "$PLIST"
-          plutil -replace CFBundleDisplayName -string "ぽちっと世界の国" "$PLIST"
+          plutil -replace CFBundleDisplayName -string "せかいタッチ" "$PLIST"
           plutil -replace GADApplicationIdentifier -string "$ADMOB_APP_ID" "$PLIST"
-          plutil -replace NSUserTrackingUsageDescription -string "広告をあなたに関連性の高い内容にするために使用します。許可しなくてもアプリはすべて無料で遊べます。" "$PLIST"
+          plutil -replace NSUserTrackingUsageDescription -string "広告をあなたに関連性の高い内容にするために使用します。許可しなくてもアプリはすべて無料で使えます。" "$PLIST"
           plutil -replace SKAdNetworkItems -json '[{"SKAdNetworkIdentifier":"cstr6suwn9.skadnetwork"}]' "$PLIST"
       - name: ビルド番号を自動採番
         script: |

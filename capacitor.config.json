@@ -1,16 +1,11 @@
 {
   "appId": "com.konishi.pochittosekai",
-  "appName": "ぽちっと世界の国",
+  "appName": "せかいタッチ",
   "webDir": "www",
-  "backgroundColor": "#f2f5f8",
+  "backgroundColor": "#cfe6f3",
   "ios": {
-    "contentInset": "always",
-    "backgroundColor": "#f2f5f8"
-  },
-  "plugins": {
-    "LocalNotifications": {
-      "smallIcon": "ic_stat_icon",
-      "iconColor": "#1f6fae"
-    }
+    "contentInset": "never",
+    "backgroundColor": "#cfe6f3",
+    "scrollEnabled": false
   }
 }

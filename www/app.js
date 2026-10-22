@@ -1,426 +1,548 @@
-'use strict';
-// ================= 保存 =================
-const KEY='ps_v1';
-const DEF={streak:0,lastDay:null,best:0,daily:{},seen:{},tut:false,sound:true,notif:true,notifTime:'08:00',firstDay:null,
-  badges:{},stats:{perfect:0,practiceBest:0,archive:0,hints:0,correct:0},protectUsed:null};
-let S=JSON.parse(JSON.stringify(DEF));
-try{const s=localStorage.getItem(KEY);if(s){const o=JSON.parse(s);S=Object.assign(S,o);S.stats=Object.assign({},DEF.stats,o.stats||{});S.seen=o.seen||{};}}catch(e){}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+/* せかいタッチ — 地図をさわって世界の国を覚えるアプリ
+ *
+ *  さがす   : 地図を拡大・移動して国をタップ → 国旗・首都・面積・となりの国を見る
+ *  場所あて : 「○○はどこ？」→ 地図の上でその国をタップして答える（2回までチャンス）
+ *  きろく   : 国ごとの習熟度（☆0〜3）で地図をぬり分け、地域ごとの達成率を見る
+ */
+var App = (function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var NS = 'http://www.w3.org/2000/svg';
 
-// ================= 日付 =================
-const EPOCH=new Date(2026,9,19); // 2026-10-19 = #1(ローカル日付)。公開日に合わせて変える
-const DAY=86400000;
-const mid=d=>new Date(d.getFullYear(),d.getMonth(),d.getDate());
-function dayIndex(d=new Date()){return Math.round((mid(d)-mid(EPOCH))/DAY)+1;}
-function dateFromN(n){const d=new Date(EPOCH);d.setDate(d.getDate()+n-1);return d;}
-function dayKey(d=new Date()){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
-function keyFromN(n){return dayKey(dateFromN(n));}
-const todayN=()=>dayIndex(new Date());
-const yKey=()=>dayKey(new Date(Date.now()-DAY)),y2Key=()=>dayKey(new Date(Date.now()-2*DAY));
-
-// ================= 乱数(決定的) =================
-function rng(seed){let s=seed>>>0;return()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296;};}
-function shuffle(a,r=Math.random){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(r()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
-
-// ================= 問題の組み立て =================
-// 出題タイプ: flag=国旗 / map=地図で光る国 / cap=首都から
-// 1日の5問: [国旗4択, 地図4択, 首都4択, 国旗6択, 地図6択]  (level 1=4択(有名な国) 2=6択(すべての国))
-const DAILY_SLOTS=[{t:'flag',lv:1},{t:'map',lv:1},{t:'cap',lv:1},{t:'flag',lv:2},{t:'map',lv:2}];
-const TYPE_NAME={flag:'この国旗の国は？',map:'地図のどこ？',cap:'首都から当てよう'};
-const LV=['','4択','6択'];
-// タイプ・レベルごとに出題できる国
-function pool(t,lv){
-  return PREF.filter(p=>(t!=='map'||p.onMap)&&(t!=='cap'||p.capQ)&&(lv!==1||p.easy));
-}
-// ダミーの候補: 6択は同じ小地域・隣国から(似た国が並ぶので難しい)、4択は有名な国を中心に1つだけ近い国
-function dummies(p,n,r,t){
-  const ok=x=>x.id!==p.id&&(t!=='map'||x.onMap);
-  const near=PREF.filter(x=>ok(x)&&(x.sub===p.sub||p.adj.includes(x.id)));
-  const far=PREF.filter(x=>ok(x)&&x.sub!==p.sub&&!p.adj.includes(x.id)&&(n===6||x.easy));
-  const pick=n===6?[...shuffle(near,r),...shuffle(far,r)]:[...shuffle(near.filter(x=>x.easy),r).slice(0,1),...shuffle(far,r)];
-  const out=[];for(const x of pick){if(!out.includes(x.id))out.push(x.id);if(out.length>=n-1)break;}
-  return out;
-}
-function makeQ(p,type,lv,r){
-  const n=lv===1?4:6;
-  const choices=shuffle([p.id,...dummies(p,n,r,type)],r);
-  return {id:p.id,type,lv,choices};
-}
-// 各スロットごとに出題候補を決定的に並べ替え、1周するまで同じ国を出さない。同じ日に同じ国は出さない
-function dailySet(n){
-  const used=new Set();
-  return DAILY_SLOTS.map((s,slot)=>{
-    const pl=pool(s.t,s.lv);
-    const order=shuffle(pl,rng(20261019+slot*1000+Math.max(0,Math.floor((n-1)/pl.length))));
-    let idx=((n-1)%pl.length+pl.length)%pl.length,p=order[idx];
-    while(used.has(p.id)){idx=(idx+1)%pl.length;p=order[idx];}
-    used.add(p.id);
-    return makeQ(p,s.t,s.lv,rng(n*97+slot*13+p.id));
+  /* ========== データ ========== */
+  var REGION = ['', 'アジア', 'ヨーロッパ', 'アフリカ', '北中米', '南アメリカ', 'オセアニア'];
+  var C = COUNTRY_DATA.map(function (r) {
+    return { id: r[0], iso3: r[1], iso2: r[2], name: r[3], cap: r[4], reg: r[5], sub: r[6], area: r[7], adj: r[8],
+      famous: !!r[9], onMap: !!r[10], note: r[11], d: r[12], c: r[13], b: r[14], ll: r[15] };
   });
-}
+  var byId = {}; C.forEach(function (c) { byId[c.id] = c; });
+  var JAPAN_AREA = byId[192].area;
+  C.forEach(function (c) {
+    // 小さすぎて形をタップしにくい国は点で表示する
+    c.dot = !c.d || !c.b || (c.b[2] - c.b[0]) * (c.b[3] - c.b[1]) < 3;
+  });
+  function flag(c) { return String.fromCodePoint.apply(null, c.iso2.split('').map(function (ch) { return 0x1F1E6 + ch.charCodeAt(0) - 65; })); }
 
-// ================= 地図・国旗の描画 =================
-function svgPath(p,cls){return `<path class="pf ${cls||''}" d="${MAP_PATHS[p.num]}"/>`;}
-let BASE_PATHS=null;   // 出題しない地域(海外領土など)も含めた背景の陸地
-function basePaths(){if(!BASE_PATHS){const mine=new Set(PREF.map(p=>p.num));BASE_PATHS=Object.keys(MAP_PATHS).filter(k=>!mine.has(k)).map(k=>`<path class="pf" d="${MAP_PATHS[k]}"/>`).join('');}return BASE_PATHS;}
-// 地図で1か国を光らせる。小さな国でも見えるよう、その国のまわりをズームして表示(右下に世界全体の位置)
-function mapHTML(id,state){
-  const p=P(id),b=MAP_BBOX[p.num];
-  const MIN=150;const w=Math.max(b[2]*2.6,MIN),h=Math.max(b[3]*2.6,MIN*0.8);
-  let x=b[0]+b[2]/2-w/2,y=b[1]+b[3]/2-h/2;
-  x=Math.max(-20,Math.min(MAP_W+20-w,x));y=Math.max(-20,Math.min(MAP_H+20-h,y));
-  const all=basePaths()+PREF.filter(q=>MAP_PATHS[q.num]).map(q=>svgPath(q,q.id===id?'tgt '+(state||''):'')).join('');
-  const dot=Math.max(b[2],b[3])<12?`<circle class="ring ${state||''}" cx="${(b[0]+b[2]/2).toFixed(1)}" cy="${(b[1]+b[3]/2).toFixed(1)}" r="${(Math.max(w,h)*0.06).toFixed(1)}"/>`:'';
-  return `<svg viewBox="${x.toFixed(0)} ${y.toFixed(0)} ${w.toFixed(0)} ${h.toFixed(0)}" preserveAspectRatio="xMidYMid meet">${all}${dot}</svg>
-  <div class="mini"><svg viewBox="0 0 ${MAP_W} ${MAP_H}">${basePaths()}${PREF.filter(q=>MAP_PATHS[q.num]).map(q=>svgPath(q,q.id===id?'tgt':'')).join('')}<rect class="box" x="${x.toFixed(0)}" y="${y.toFixed(0)}" width="${w.toFixed(0)}" height="${h.toFixed(0)}"/></svg></div>`;
-}
-function flagHTML(p,big){return `<span class="fl${big?' big':''}">${flagOf(p)}</span>`;}
-function capHTML(p,more){
-  return `<div class="hintcard"><div class="hq">首都が…</div><div class="h">${p.cap}</div><div class="hq">の国は？</div>${more?`<div class="h more">国旗は ${flagOf(p)}</div>`:''}</div>`;
-}
-function renderQ(q,state){
-  const p=P(q.id),box=$('qbox');
-  if(q.type==='map')box.innerHTML=mapHTML(q.id,state);
-  else if(q.type==='flag')box.innerHTML=`<div class="flagcard ${state||''}">${flagHTML(p,true)}</div>`;
-  else box.innerHTML=capHTML(p,G.mean);
-}
+  /* ========== 保存 ========== */
+  var KEY = 'st_v1';
+  function blank() { return { lv: {}, miss: {}, seen: {}, games: 0, right: 0, asked: 0, sound: true, names: true }; }
+  var S;
+  try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { S = blank(); }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+  function lv(id) { return S.lv[id] || 0; }
 
-// ================= 効果音(Web Audio) =================
-let AC=null;
-function ac(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}}if(AC&&AC.state==='suspended')AC.resume();return AC;}
-function tone(f,t0,dur,type='sine',vol=.18){const c=ac();if(!c||!S.sound)return;const o=c.createOscillator(),g=c.createGain();
-  o.type=type;o.frequency.value=f;g.gain.setValueAtTime(0,c.currentTime+t0);g.gain.linearRampToValueAtTime(vol,c.currentTime+t0+.01);
-  g.gain.exponentialRampToValueAtTime(.0001,c.currentTime+t0+dur);o.connect(g);g.connect(c.destination);o.start(c.currentTime+t0);o.stop(c.currentTime+t0+dur+.05);}
-const sfx={
-  tap(){tone(880,0,.05,'triangle',.08);},
-  ok(){tone(660,0,.12,'sine');tone(990,.1,.2,'sine');},
-  ng(){tone(180,0,.18,'square',.08);},
-  perfect(){[523,659,784,1047].forEach((f,i)=>tone(f,i*.09,.25,'triangle',.15));},
-  badge(){[784,1047,1319].forEach((f,i)=>tone(f,i*.08,.3,'sine',.12));},
-  reveal(){tone(330,0,.3,'sine',.1);}
-};
+  /* ========== 音 ========== */
+  var ac = null;
+  function tone(f, d, type, v) {
+    if (!S.sound) return;
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === 'suspended') ac.resume();
+      var o = ac.createOscillator(), g = ac.createGain();
+      o.type = type || 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(v || 0.1, ac.currentTime); g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + d);
+      o.connect(g).connect(ac.destination); o.start(); o.stop(ac.currentTime + d);
+    } catch (e) {}
+  }
+  var sound = {
+    tap: function () { tone(700, 0.05, 'triangle', 0.05); },
+    ok: function () { tone(784, 0.09); setTimeout(function () { tone(1046, 0.14); }, 90); },
+    ng: function () { tone(196, 0.2, 'square', 0.05); },
+    end: function () { [523, 659, 784, 1046].forEach(function (f, i) { setTimeout(function () { tone(f, 0.12); }, i * 90); }); }
+  };
 
-// ================= 画面ユーティリティ =================
-const $=id=>document.getElementById(id);
-let show=function(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));$(id).classList.add('on');window.scrollTo(0,0);};
-let toastT;function toast(t,ms=1600){const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>e.classList.remove('on'),ms);}
-function modal(title,body,ok,cancel,okLabel='OK',silId){
-  $('ovTitle').textContent=title;$('ovBody').textContent=body;$('ov').classList.add('on');
-  const sil=$('ovSil');if(silId){sil.style.display='';sil.innerHTML=flagHTML(P(silId),true);}else{sil.style.display='none';sil.innerHTML='';}
-  $('ovOk').textContent=okLabel;$('ovCancel').style.display=cancel?'block':'none';
-  $('ovOk').onclick=()=>{$('ov').classList.remove('on');ok&&ok();};
-  $('ovCancel').onclick=()=>{$('ov').classList.remove('on');cancel&&cancel();};
-}
-function prefInfo(p){
-  const adj=p.adj.map(i=>P(i).n);
-  return `首都: ${p.cap}${p.capNote?`\n（${p.capNote}）`:''}\n地域: ${REGIONS[p.reg]}・${p.sub}\n面積: ${p.area.toLocaleString()} km²\n${adj.length?'陸続きの隣国: '+adj.join('、'):'陸続きの隣国はない'}`;
-}
-function resHTML(p,mark,type){
-  return `<div class="res"><span class="k">${flagOf(p)} ${p.n}</span><span class="w">${mark?mark+' ':''}${type?TYPE_NAME[type]+'<br>':''}${p.cap} · ${p.sub}</span></div>`;
-}
+  /* ========== UI部品 ========== */
+  var UI = window.UI = {
+    dialog: function (title, body, ok, cancel, okLabel) {
+      $('dT').textContent = title; $('dB').textContent = body || '';
+      var row = $('dR'); row.innerHTML = '';
+      if (cancel) { var c = document.createElement('button'); c.className = 'btn sub'; c.textContent = 'キャンセル'; c.onclick = function () { $('dlg').classList.remove('on'); cancel(); }; row.appendChild(c); }
+      var b = document.createElement('button'); b.className = 'btn'; b.textContent = okLabel || 'OK'; b.onclick = function () { $('dlg').classList.remove('on'); if (ok) ok(); }; row.appendChild(b);
+      $('dlg').classList.add('on');
+    }
+  };
+  var toastT = 0;
+  function toast(t) { var e = $('toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(function () { e.classList.remove('on'); }, 1800); }
+  var fbT = 0;
+  function feedback(t, kind, ms) { var e = $('fb'); e.textContent = t; e.className = 'fb on ' + (kind || ''); clearTimeout(fbT); fbT = setTimeout(function () { e.className = 'fb'; }, ms || 1600); }
+  function km(n) { return n >= 1000 ? (Math.round(n / 100) * 100).toLocaleString() : String(Math.round(n / 10) * 10); }
+  function areaText(a) {
+    if (!a) return '0.44km²';
+    if (a === JAPAN_AREA) return a.toLocaleString() + 'km²';
+    var r = a / JAPAN_AREA;
+    var x = r >= 10 ? Math.round(r) + '倍' : r >= 1 ? r.toFixed(1) + '倍' : r >= 0.01 ? Math.round(r * 100) + '%' : '1%未満';
+    return a.toLocaleString() + 'km²（日本の' + x + '）';
+  }
 
-// ================= バッジ =================
-const seenN=()=>Object.keys(S.seen).length;
-const regionDone=reg=>PREF.filter(p=>p.reg===reg).every(p=>S.seen[p.id]);
-const BADGES=[
-  {id:'first',ic:'🌱',name:'はじめの一歩',desc:'今日の5問を初めて解いた',test:()=>Object.keys(S.daily).length>=1},
-  {id:'perfect1',ic:'💮',name:'満点!',desc:'5問すべて🟩',test:()=>S.stats.perfect>=1},
-  {id:'perfect5',ic:'🎯',name:'百発百中',desc:'5問すべて🟩 を5回',test:()=>S.stats.perfect>=5},
-  {id:'streak3',ic:'🔥',name:'三日坊主…じゃない',desc:'3日連続',test:()=>S.streak>=3},
-  {id:'streak7',ic:'🧭',name:'一週間',desc:'7日連続',test:()=>S.streak>=7},
-  {id:'streak30',ic:'🎖️',name:'皆勤賞',desc:'30日連続',test:()=>S.streak>=30},
-  {id:'zukan10',ic:'🧳',name:'旅のはじまり',desc:'図鑑に10か国集めた',test:()=>seenN()>=10},
-  {id:'zukan50',ic:'✈️',name:'世界旅行者',desc:'図鑑に50か国集めた',test:()=>seenN()>=50},
-  {id:'zukan100',ic:'🗺️',name:'地球の半分',desc:'図鑑に100か国集めた',test:()=>seenN()>=100},
-  {id:'samerica',ic:'🦙',name:'南アメリカ制覇',desc:`南アメリカの${PREF.filter(p=>p.reg===5).length}か国を図鑑に集めた`,test:()=>regionDone(5)},
-  {id:'oceania',ic:'🏝️',name:'オセアニア制覇',desc:`オセアニアの${PREF.filter(p=>p.reg===6).length}か国を図鑑に集めた`,test:()=>regionDone(6)},
-  {id:'zukanAll',ic:'🌏',name:'世界一周',desc:`${PREF.length}か国すべて図鑑に集めた`,test:()=>seenN()>=PREF.length},
-  {id:'archive5',ic:'📅',name:'温故知新',desc:'過去問を5日分解いた',test:()=>S.stats.archive>=5},
-  {id:'practice10',ic:'✏️',name:'地理博士',desc:'練習で10問連続正解',test:()=>S.stats.practiceBest>=10},
-  {id:'practice30',ic:'🏆',name:'地理マスター',desc:'練習で30問連続正解',test:()=>S.stats.practiceBest>=30},
-];
-function checkBadges(){
-  const got=[];
-  BADGES.forEach(b=>{if(!S.badges[b.id]&&b.test()){S.badges[b.id]=dayKey();got.push(b);}});
-  if(got.length){save();sfx.badge();got.forEach((b,i)=>setTimeout(()=>toast(`🏅 バッジ獲得: ${b.name}`,2200),600+i*2300));}
-}
-function renderBadges(){
-  const n=Object.keys(S.badges).length;$('badCount').textContent=`${n} / ${BADGES.length}`;
-  $('badgeList').innerHTML=BADGES.map(b=>`<div class="badge ${S.badges[b.id]?'':'lock'}"><div class="ic">${b.ic}</div><div><b>${b.name}</b><small>${b.desc}${S.badges[b.id]?'<br>'+S.badges[b.id]:''}</small></div></div>`).join('');
-  show('badges');
-}
+  /* ========== 地図 ========== */
+  var svg, cam, labels, view = { k: 1, x: 0, y: 0 }, kMin = 1, kMax = 30;
+  var shapes = {};   // id -> 要素（パス or 点）
 
-// ================= 図鑑 =================
-let zReg=1;
-function renderZukan(){
-  const n=seenN(),N=PREF.length;$('zCount').textContent=`${n} / ${N}`;$('zBar').style.width=(n/N*100)+'%';
-  $('zTabs').innerHTML=[1,2,3,4,5,6].map(l=>{const t=PREF.filter(p=>p.reg===l),g=t.filter(p=>S.seen[p.id]).length;
-    return `<button class="${l===zReg?'on':''}" data-l="${l}">${REGIONS[l]} ${g}/${t.length}</button>`;}).join('');
-  $('zTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{sfx.tap();zReg=+b.dataset.l;renderZukan();});
-  $('zList').innerHTML=PREF.filter(p=>p.reg===zReg).map(p=>S.seen[p.id]
-    ?`<div class="zi" data-id="${p.id}"><div class="zs">${flagHTML(p)}</div><b>${p.n}</b><small>${p.cap}</small></div>`
-    :`<div class="zi lock"><div class="zs"><span class="fl q">？</span></div><b>？？？</b><small>${p.sub}</small></div>`).join('');
-  $('zList').querySelectorAll('.zi[data-id]').forEach(e=>e.onclick=()=>{const p=P(+e.dataset.id);modal(p.n,prefInfo(p),null,null,'OK',p.id);});
-  show('zukan');
-}
+  function buildMap() {
+    svg = document.createElementNS(NS, 'svg');
+    cam = document.createElementNS(NS, 'g');
+    var other = document.createElementNS(NS, 'path'); other.setAttribute('class', 'o'); other.setAttribute('d', MAP_OTHER); cam.appendChild(other);
+    var dots = document.createElementNS(NS, 'g');
+    C.forEach(function (c) {
+      if (c.d) {
+        var p = document.createElementNS(NS, 'path'); p.setAttribute('class', 'c'); p.setAttribute('d', c.d); p.dataset.id = c.id; cam.appendChild(p);
+        if (!c.dot) { shapes[c.id] = p; return; }
+      }
+      var o = document.createElementNS(NS, 'circle'); o.setAttribute('class', 'dot'); o.setAttribute('cx', c.c[0]); o.setAttribute('cy', c.c[1]); o.dataset.id = c.id;
+      dots.appendChild(o); shapes[c.id] = o;
+    });
+    cam.appendChild(dots);
+    labels = document.createElementNS(NS, 'g'); cam.appendChild(labels);
+    svg.appendChild(cam); $('map').appendChild(svg);
+    fitWorld(false);
+    window.addEventListener('resize', function () { fitWorld(false); });
+    bindGestures();
+  }
 
-// ================= ホーム =================
-function renderHome(){
-  const today=dayKey();
-  if(S.lastDay&&S.lastDay!==today&&S.lastDay!==yKey()){
-    if(S.streak>0&&S.lastDay===y2Key()&&S.protectUsed!==today){
-      const st=S.streak;
-      Native.rewarded('🔥 連続記録が途切れそう!',`昨日は解いていません。動画を見ると、${st}日連続の記録を守れます。`,
-        ()=>{S.lastDay=yKey();S.protectUsed=today;save();toast('連続記録を守りました');renderHome();},
-        ()=>{S.streak=0;save();renderHome();});
+  function screen() { return { w: window.innerWidth, h: window.innerHeight }; }
+  function applyView() {
+    cam.setAttribute('transform', 'translate(' + view.x.toFixed(1) + ',' + view.y.toFixed(1) + ') scale(' + view.k.toFixed(4) + ')');
+    var r = 6 / view.k;
+    for (var id in shapes) if (shapes[id].tagName === 'circle') shapes[id].setAttribute('r', r.toFixed(3));
+    var fs = 12 / view.k;
+    for (var i = 0; i < labels.childNodes.length; i++) { var t = labels.childNodes[i]; t.setAttribute('font-size', fs.toFixed(3)); t.style.strokeWidth = (3 / view.k) + 'px'; }
+  }
+  function clampView() {
+    var s = screen(), w = MAP_W * view.k, h = MAP_H * view.k;
+    view.k = Math.max(kMin, Math.min(kMax, view.k));
+    w = MAP_W * view.k; h = MAP_H * view.k;
+    var mx = s.w * 0.5, my = s.h * 0.5;
+    view.x = w <= s.w ? (s.w - w) / 2 : Math.min(mx, Math.max(s.w - w - mx, view.x));
+    view.y = h <= s.h ? (s.h - h) / 2 : Math.min(my, Math.max(s.h - h - my, view.y));
+  }
+  function fitWorld(anim) {
+    var s = screen();
+    kMin = Math.min(s.w / MAP_W, s.h / MAP_H) * 0.98;
+    kMax = kMin * 40;
+    flyToBox([0, 0, MAP_W, MAP_H], anim, 0);
+  }
+  // 地図上の範囲 [x0,y0,x1,y1] が、上下のUIを避けた場所に収まるように動かす
+  var animId = 0;
+  function flyToBox(b, anim, pad, maxK) {
+    var s = screen(), top = 80, bottom = document.body.classList.contains('playing') ? 90 : 110;
+    if (document.body.classList.contains('has-ad')) bottom += 56;
+    if ($('sheet').classList.contains('on')) bottom = Math.max(bottom, s.h * 0.45);
+    pad = pad == null ? 24 : pad;
+    var bw = Math.max(b[2] - b[0], 4), bh = Math.max(b[3] - b[1], 4);
+    var aw = s.w - pad * 2, ah = s.h - top - bottom - pad * 2;
+    var k = Math.min(aw / bw, ah / bh);
+    k = Math.max(kMin, Math.min(maxK || kMax * 0.5, k));
+    var tx = s.w / 2 - (b[0] + bw / 2) * k, ty = top + pad + ah / 2 - (b[1] + bh / 2) * k;
+    var from = { k: view.k, x: view.x, y: view.y }, to = { k: k, x: tx, y: ty };
+    var id = ++animId;
+    if (!anim) { view.k = k; view.x = tx; view.y = ty; clampView(); applyView(); return; }
+    var t0 = performance.now(), dur = 420;
+    (function step(t) {
+      if (id !== animId) return;
+      var p = Math.min(1, (t - t0) / dur), e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      // 拡大率は対数で補間すると自然に見える
+      view.k = Math.exp(Math.log(from.k) + (Math.log(to.k) - Math.log(from.k)) * e);
+      var cx = (s.w / 2 - from.x) / from.k + ((s.w / 2 - to.x) / to.k - (s.w / 2 - from.x) / from.k) * e;
+      var cy = (s.h / 2 - from.y) / from.k + ((s.h / 2 - to.y) / to.k - (s.h / 2 - from.y) / from.k) * e;
+      view.x = s.w / 2 - cx * view.k; view.y = s.h / 2 - cy * view.k;
+      applyView();
+      if (p < 1) requestAnimationFrame(step); else { view.k = to.k; view.x = to.x; view.y = to.y; clampView(); applyView(); }
+    })(t0);
+  }
+  function zoomAt(f, sx, sy) {
+    var k = Math.max(kMin, Math.min(kMax, view.k * f));
+    view.x = sx - (sx - view.x) * (k / view.k); view.y = sy - (sy - view.y) * (k / view.k); view.k = k;
+    clampView(); applyView();
+  }
+  function boxOf(ids) {
+    var b = [Infinity, Infinity, -Infinity, -Infinity];
+    ids.forEach(function (id) {
+      var c = byId[id], bb = c.b && !c.dot ? c.b : [c.c[0] - 3, c.c[1] - 3, c.c[0] + 3, c.c[1] + 3];
+      // ロシアなど極端に大きい国は中心付近だけを見る
+      if (c.iso3 === 'RUS') bb = [580, 90, 760, 230];
+      b[0] = Math.min(b[0], bb[0]); b[1] = Math.min(b[1], bb[1]); b[2] = Math.max(b[2], bb[2]); b[3] = Math.max(b[3], bb[3]);
+    });
+    return b;
+  }
+  function boxAround(id, span) {
+    var c = byId[id];
+    var b = c.b && !c.dot ? c.b.slice() : [c.c[0], c.c[1], c.c[0], c.c[1]];
+    if (c.iso3 === 'RUS') b = [520, 80, 900, 240];
+    var cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2, w = Math.max(b[2] - b[0], span), h = Math.max(b[3] - b[1], span);
+    return [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+  }
+
+  /* --- タッチ操作（1本指で移動・2本指で拡大・タップで選択） --- */
+  var onTap = null;
+  function bindGestures() {
+    var el = $('map'), pts = {}, start = null, pinch = null, moved = 0;
+    el.addEventListener('pointerdown', function (e) {
+      el.setPointerCapture && el.setPointerCapture(e.pointerId);
+      pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+      animId++;
+      var n = Object.keys(pts).length;
+      if (n === 1) { start = { x: e.clientX, y: e.clientY, t: performance.now(), vx: view.x, vy: view.y }; moved = 0; }
+      if (n === 2) { var p = Object.values(pts); pinch = { d: dist(p[0], p[1]), k: view.k, m: mid(p[0], p[1]), vx: view.x, vy: view.y }; moved = 99; }
+    });
+    el.addEventListener('pointermove', function (e) {
+      if (!pts[e.pointerId]) return;
+      pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+      var p = Object.values(pts);
+      if (p.length >= 2 && pinch) {
+        var m = mid(p[0], p[1]), k = Math.max(kMin, Math.min(kMax, pinch.k * dist(p[0], p[1]) / pinch.d));
+        var mx = (pinch.m.x - pinch.vx) / pinch.k, my = (pinch.m.y - pinch.vy) / pinch.k;
+        view.k = k; view.x = m.x - mx * k; view.y = m.y - my * k; clampView(); applyView();
+      } else if (p.length === 1 && start) {
+        var dx = e.clientX - start.x, dy = e.clientY - start.y;
+        moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
+        if (moved > 6) { view.x = start.vx + dx; view.y = start.vy + dy; clampView(); applyView(); }
+      }
+    });
+    var end = function (e) {
+      if (!pts[e.pointerId]) return;
+      delete pts[e.pointerId];
+      var n = Object.keys(pts).length;
+      if (n === 1) { var p = Object.values(pts)[0]; start = { x: p.x, y: p.y, t: 0, vx: view.x, vy: view.y }; pinch = null; return; }
+      if (n === 0) {
+        pinch = null;
+        if (start && moved <= 6 && performance.now() - start.t < 450 && e.type === 'pointerup') {
+          var id = hit(e.clientX, e.clientY);
+          if (onTap) onTap(id, e.clientX, e.clientY);
+        }
+        start = null;
+      }
+    };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+    el.addEventListener('wheel', function (e) { e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX, e.clientY); }, { passive: false });
+    var lastTap = 0;
+    el.addEventListener('pointerup', function (e) {
+      var t = performance.now();
+      if (t - lastTap < 280 && moved <= 6) zoomAt(2, e.clientX, e.clientY);
+      lastTap = t;
+    });
+    $('zin').onclick = function () { var s = screen(); zoomAt(1.8, s.w / 2, s.h / 2); };
+    $('zout').onclick = function () { var s = screen(); zoomAt(1 / 1.8, s.w / 2, s.h / 2); };
+    $('zall').onclick = function () { fitWorld(true); };
+  }
+  function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+  function mid(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+  // 指の位置にある国。点の国は少し外れても拾う
+  function hit(x, y) {
+    var el = document.elementFromPoint(x, y);
+    var id = el && el.dataset && el.dataset.id ? +el.dataset.id : null;
+    if (id) return id;
+    var best = null, bd = 18;
+    C.forEach(function (c) {
+      if (!c.dot) return;
+      var sx = c.c[0] * view.k + view.x, sy = c.c[1] * view.k + view.y, d = Math.hypot(sx - x, sy - y);
+      if (d < bd) { bd = d; best = c.id; }
+    });
+    return best;
+  }
+
+  function paintLevels(on) {
+    C.forEach(function (c) {
+      var e = shapes[c.id], l = on ? lv(c.id) : 0;
+      e.classList.remove('l1', 'l2', 'l3');
+      if (l) e.classList.add('l' + l);
+      // 点で出す国も、形があれば形のほうにも色を付ける
+      if (c.d && c.dot) { var p = cam.querySelector('path[data-id="' + c.id + '"]'); if (p) { p.classList.remove('l1', 'l2', 'l3'); if (l) p.classList.add('l' + l); } }
+    });
+  }
+  function mark(id, cls, on) {
+    var e = shapes[id]; if (!e) return;
+    e.classList.toggle(cls, on);
+    var p = byId[id].dot && byId[id].d ? cam.querySelector('path[data-id="' + id + '"]') : null;
+    if (p) p.classList.toggle(cls, on);
+  }
+  function clearMarks() {
+    ['sel', 'ok', 'ng', 'goal', 'dim'].forEach(function (k) { cam.querySelectorAll('.' + k).forEach(function (e) { e.classList.remove(k); }); });
+    labels.innerHTML = '';
+  }
+  function label(id, text) {
+    var c = byId[id], t = document.createElementNS(NS, 'text');
+    t.setAttribute('class', 'lbl'); t.setAttribute('x', c.c[0]); t.setAttribute('y', c.c[1] - (c.dot ? 10 / view.k : 0));
+    t.textContent = text || c.name; labels.appendChild(t); applyView();
+  }
+
+  /* ========== 画面の切り替え ========== */
+  var tab = 'explore';
+  function setTab(t) {
+    tab = t;
+    document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === t); });
+    if (t === 'play') openSetup();
+    else if (t === 'stats') openStats();
+    else if (t === 'settings') openSettings();
+    else { closePanel(); }
+    updateAd();
+  }
+  function closePanel() { $('panel').classList.remove('on'); if (tab !== 'explore' && !game) { tab = 'explore'; document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === 'explore'); }); } updateAd(); }
+  function panel(html) { $('pbox').innerHTML = html; $('panel').classList.add('on'); var x = $('pbox').querySelector('[data-close]'); if (x) x.onclick = function () { sound.tap(); closePanel(); paintLevels(true); clearMarks(); }; }
+  $('panel').addEventListener('click', function (e) { if (e.target === $('panel') && !game) { closePanel(); clearMarks(); paintLevels(true); } });
+  function updateAd() {
+    var show = !game && !$('panel').classList.contains('on') && !Native.premium();
+    Native.banner(show);
+    document.body.classList.toggle('has-ad', show && Native.inApp);
+  }
+  function updateProgress() {
+    var done = C.filter(function (c) { return lv(c.id) >= 3; }).length;
+    $('prog').innerHTML = '覚えた <b>' + done + '</b>/' + C.length;
+  }
+
+  /* ========== さがす ========== */
+  var selected = null;
+  function select(id, fly) {
+    clearMarks();
+    selected = id;
+    if (!id) { $('sheet').classList.remove('on'); return; }
+    var c = byId[id];
+    mark(id, 'sel', true); label(id);
+    S.seen[id] = 1; save();
+    var l = lv(id), stars = '★★★'.slice(0, l) + '<i>' + '★★★'.slice(l) + '</i>';
+    var adj = c.adj.map(function (a) { return '<button data-go="' + a + '">' + byId[a].name + '</button>'; }).join('');
+    $('sheet').innerHTML = '<button class="x" id="shx">✕</button>' +
+      '<div class="kh"><div class="flag">' + flag(c) + '</div><div><div class="kn">' + c.name + '</div><div class="ks">' + REGION[c.reg] + '・' + c.sub + '　<span class="stars">' + stars + '</span></div></div></div>' +
+      '<div class="kg"><div><span>首都</span><b>' + c.cap + '</b></div><div><span>面積</span><b style="font-size:13px">' + areaText(c.area) + '</b></div></div>' +
+      (c.note ? '<div class="knote">※ ' + c.note + '</div>' : '') +
+      '<div class="kadj">' + (c.adj.length ? '陸でとなりの国（' + c.adj.length + '）<br>' + adj : 'となりの国：陸の国境なし') + '</div>';
+    $('sheet').classList.add('on');
+    $('shx').onclick = function () { sound.tap(); select(null); };
+    $('sheet').querySelectorAll('[data-go]').forEach(function (b) { b.onclick = function () { sound.tap(); select(+b.dataset.go, true); }; });
+    if (fly) flyToBox(boxAround(id, 40), true);
+  }
+  function exploreTap(id) {
+    if (!id) { select(null); return; }
+    sound.tap(); select(id, false);
+  }
+  // 国名さがし
+  var kana = function (s) { return s.replace(/[ぁ-ゖ]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) + 0x60); }); };
+  $('q').addEventListener('input', function () {
+    var v = kana($('q').value.trim()), box = $('sugg');
+    if (!v) { box.classList.remove('on'); return; }
+    var hits = C.filter(function (c) { return kana(c.name).indexOf(v) >= 0 || kana(c.cap).indexOf(v) >= 0; }).slice(0, 6);
+    box.innerHTML = hits.map(function (c) { return '<div data-id="' + c.id + '">' + flag(c) + ' ' + c.name + '<span style="color:var(--sub);font-size:12px">　' + c.cap + '</span></div>'; }).join('') || '<div style="color:var(--sub)">見つかりません</div>';
+    box.classList.add('on');
+    box.querySelectorAll('[data-id]').forEach(function (d) { d.onclick = function () { $('q').value = ''; box.classList.remove('on'); $('q').blur(); select(+d.dataset.id, true); }; });
+  });
+
+  /* ========== 場所あて ========== */
+  var AREAS = [
+    { k: 0, n: '世界ぜんぶ', e: '🌏' }, { k: 1, n: 'アジア', e: '🏯' }, { k: 2, n: 'ヨーロッパ', e: '🏰' },
+    { k: 3, n: 'アフリカ', e: '🦁' }, { k: 4, n: '北中米', e: '🗽' }, { k: 5, n: '南アメリカ', e: '🦜' }, { k: 6, n: 'オセアニア', e: '🐨' }
+  ];
+  var LEVELS = [{ k: 'easy', n: 'やさしい', d: 'よく聞く国' }, { k: 'map', n: 'ふつう', d: '地図で形が見える国' }, { k: 'all', n: 'ぜんぶ', d: '小さな島国もふくめて全部' }];
+  var setup = { area: 0, level: 'easy' };
+  try { Object.assign(setup, JSON.parse(localStorage.getItem('st_setup') || '{}')); } catch (e) {}
+  function pool(area, level) {
+    return C.filter(function (c) {
+      if (area && c.reg !== area) return false;
+      if (level === 'easy') return c.famous && !c.dot;
+      if (level === 'map') return c.onMap || c.reg === 6;
+      return true;
+    });
+  }
+  function prog(list) { return list.length ? Math.round(list.reduce(function (a, c) { return a + lv(c.id); }, 0) / (list.length * 3) * 100) : 0; }
+  function rate(list) { return list.length ? Math.round(list.filter(function (c) { return lv(c.id) >= 3; }).length / list.length * 100) : 0; }
+  function openSetup() {
+    var html = '<div class="ph"><h2>📍 場所あて</h2><button data-close>✕</button></div>' +
+      '<p class="lead">「○○はどこ？」と聞かれたら、地図の上でその国をタップ。まちがえても、どっちの方向か教えてくれます。</p>' +
+      '<div class="areas">' + AREAS.map(function (a) {
+        var p = pool(a.k, 'all');
+        return '<button class="area ' + (setup.area === a.k ? 'on' : '') + '" data-a="' + a.k + '"><b>' + a.e + ' ' + a.n + '</b><span>' + p.length + 'か国・覚えた ' + rate(p) + '%</span><div class="bar"><i style="width:' + prog(p) + '%"></i></div></button>';
+      }).join('') + '</div>' +
+      '<div class="seg">' + LEVELS.map(function (l) { return '<button data-l="' + l.k + '" class="' + (setup.level === l.k ? 'on' : '') + '">' + l.n + '</button>'; }).join('') + '</div>' +
+      '<div class="cap" id="pinfo"></div>' +
+      '<button class="btn" id="go">スタート</button>';
+    panel(html);
+    var info = function () { var n = pool(setup.area, setup.level).length, d = LEVELS.filter(function (l) { return l.k === setup.level; })[0].d; $('pinfo').textContent = d + '・' + n + 'か国から ' + Math.min(10, n) + '問'; };
+    info();
+    $('pbox').querySelectorAll('[data-a]').forEach(function (b) { b.onclick = function () { sound.tap(); setup.area = +b.dataset.a; $('pbox').querySelectorAll('[data-a]').forEach(function (x) { x.classList.toggle('on', x === b); }); info(); }; });
+    $('pbox').querySelectorAll('[data-l]').forEach(function (b) { b.onclick = function () { sound.tap(); setup.level = b.dataset.l; $('pbox').querySelectorAll('[data-l]').forEach(function (x) { x.classList.toggle('on', x === b); }); info(); }; });
+    $('go').onclick = function () { sound.tap(); try { localStorage.setItem('st_setup', JSON.stringify(setup)); } catch (e) {} startGame(pool(setup.area, setup.level), null); };
+  }
+
+  var game = null;
+  // 出題: 前にまちがえた国 → 習熟度が低い国 の順に優先して、ランダムに選ぶ
+  function pick(list, n) {
+    var scored = list.map(function (c) { return { c: c, s: (S.miss[c.id] ? 3 : 0) + (3 - lv(c.id)) + Math.random() * 2.5 }; });
+    scored.sort(function (a, b) { return b.s - a.s; });
+    var out = scored.slice(0, n).map(function (x) { return x.c.id; });
+    for (var i = out.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = out[i]; out[i] = out[j]; out[j] = t; }
+    return out;
+  }
+  function startGame(list, fixed) {
+    closePanel(); select(null);
+    var ids = fixed || pick(list, Math.min(10, list.length));
+    game = { ids: ids, i: 0, tries: 0, score: 0, log: [], hints: 1, box: boxOf(list.map(function (c) { return c.id; })), lock: false };
+    document.body.classList.add('playing');
+    paintLevels(false);
+    updateAd();
+    Native.track('play_start', { area: setup.area, level: setup.level });
+    flyToBox(game.box, true, 16);
+    setTimeout(ask, 300);
+  }
+  function ask() {
+    clearMarks();
+    var c = byId[game.ids[game.i]];
+    game.tries = 0; game.lock = false; game.hinted = false;
+    // 前の問題で拡大していたら、出題範囲の全体に戻す
+    if (game.i > 0) flyToBox(game.box, true, 16);
+    $('ask').innerHTML = '<div class="flag">' + flag(c) + '</div><div class="q"><b>' + c.name + 'はどこ？</b><span>首都 ' + c.cap + '</span></div>' +
+      '<div class="n">' + (game.i + 1) + ' / ' + game.ids.length + '</div><button class="quit" id="quit">✕</button>';
+    $('quit').onclick = function () { sound.tap(); UI.dialog('やめますか？', 'ここまでの結果は、覚えた度合いには反映されています。', endGame.bind(null, true), function () {}, 'やめる'); };
+    $('hintBtn').textContent = game.hints > 0 ? '💡 ヒント（あと' + game.hints + '回）' : '💡 ヒント（動画）';
+    if (Native.premium()) $('hintBtn').textContent = '💡 ヒント';
+  }
+  // 方角(8方位)と距離
+  function bearing(a, b) {
+    var r = Math.PI / 180, la1 = a[1] * r, la2 = b[1] * r, dl = (b[0] - a[0]) * r;
+    var y = Math.sin(dl) * Math.cos(la2), x = Math.cos(la1) * Math.sin(la2) - Math.sin(la1) * Math.cos(la2) * Math.cos(dl);
+    var deg = (Math.atan2(y, x) / r + 360) % 360;
+    var d = Math.acos(Math.min(1, Math.sin(la1) * Math.sin(la2) + Math.cos(la1) * Math.cos(la2) * Math.cos(dl))) * 6371;
+    return { dir: ['北', '北東', '東', '南東', '南', '南西', '西', '北西'][Math.round(deg / 45) % 8], km: d };
+  }
+  function playTap(id) {
+    if (!game || game.lock || !id) return;
+    var goal = game.ids[game.i];
+    if (id === goal) {
+      game.lock = true; sound.ok();
+      var first = game.tries === 0;
+      mark(id, 'ok', true); label(id);
+      game.score += first ? 2 : 1;
+      game.log.push({ id: id, r: first ? 2 : 1 });
+      S.lv[id] = first && !game.hinted ? Math.min(3, lv(id) + 1) : Math.max(1, lv(id));
+      if (first) delete S.miss[id];
+      S.right++; S.asked++; save();
+      feedback(first ? 'せいかい！' : 'せいかい！（2回目）', 'ok', 900);
+      setTimeout(next, 950);
       return;
     }
-    S.streak=0;save();
-  }
-  $('hStreak').textContent=S.streak;$('hZukan').textContent=seenN();
-  $('hBadges').textContent=Object.keys(S.badges).length;
-  const done=S.daily[today];
-  $('bDaily').textContent=done?'今日の結果を見る ✓':`今日の5問  #${todayN()}`;
-  show('home');
-}
-
-// ================= ゲーム =================
-let G=null;
-// mode: 'daily' | 'archive' | 'practice' | 'tut' | 'view'
-function startDaily(){
-  const today=dayKey();
-  if(S.daily[today]){showDailyResult(S.daily[today]);return;}
-  if(!S.tut){startTutorial();return;}
-  G={mode:'daily',n:todayN(),list:dailySet(todayN()),i:0,marks:[]};Native.track('daily_start',{n:G.n});loadQ();
-}
-function startArchive(n){
-  const k=keyFromN(n);
-  if(S.daily[k]){showDailyResult(S.daily[k]);return;}
-  G={mode:'archive',n,list:dailySet(n),i:0,marks:[]};loadQ();
-}
-function practiceList(){
-  const types=['flag','map','cap'];
-  return shuffle(PREF).map((p,i)=>{
-    let t=types[i%3];if(t==='map'&&!p.onMap)t='flag';if(t==='cap'&&!p.capQ)t='flag';
-    return makeQ(p,t,p.easy&&Math.random()<0.6?1:2,Math.random);
-  });
-}
-function startPractice(){
-  G={mode:'practice',list:practiceList(),i:0,marks:[],lives:3,score:0,wrongs:[],continued:false};Native.track('practice_start');loadQ();
-}
-function startTutorial(){
-  const id=iso=>PREF.find(p=>p.iso3===iso).id;
-  modal('はじめまして!','国旗・地図・首都から、国の名前を当てるゲームです。\nまず1問、いっしょにやってみましょう。',
-    ()=>{Native.track('tutorial_begin');G={mode:'tut',list:[{id:id('JPN'),type:'flag',lv:1,choices:[id('KOR'),id('JPN'),id('USA'),id('CHN')]}],i:0,marks:[]};loadQ();},null,'やってみる');
-}
-function loadQ(){
-  const q=G.list[G.i],p=P(q.id);
-  G.tries=0;G.hint=0;G.mean=false;G.answered=false;
-  renderQ(q);
-  $('qTitle').innerHTML=`${TYPE_NAME[q.type]}<span class="lvtag">${LV[q.lv]}</span>`;
-  const m=$('ymean');m.className='ymean';m.innerHTML='';
-  const msg=$('pMsg');msg.className='msg';
-  if(G.mode==='tut'){msg.className='msg tut';msg.textContent='この国旗の国をタップ!';}
-  else msg.textContent=q.type==='map'?'光っている国は？':q.type==='flag'?'この国旗の国は？':'この首都がある国は？';
-  $('pProg').textContent=G.mode==='tut'?'れんしゅう問題':G.mode==='practice'?`練習  ${G.score} 問連続`:`${G.mode==='archive'?'過去問':'今日の5問'}  ${G.i+1} / 5`;
-  $('pLives').textContent=G.mode==='practice'?'❤'.repeat(G.lives)+'♡'.repeat(3-G.lives):(G.mode==='tut'?'':'#'+G.n);
-  const ch=$('choices');ch.innerHTML='';ch.className='choices'+(q.choices.length===4?' c4':'');
-  q.choices.forEach(id=>{const b=document.createElement('button'),nm=P(id).n;b.className='ch'+(nm.length>11?' xl':nm.length>6?' l':'');b.dataset.id=id;b.textContent=nm;b.onclick=()=>{sfx.tap();answer(id,b);};ch.appendChild(b);});
-  $('hintRow').style.display=G.mode==='tut'?'none':'';
-  $('bMean').disabled=false;$('bHint').disabled=false;
-  $('bNext').style.display='none';
-  show('play');
-}
-function answer(id,btn){
-  if(G.answered)return;
-  const q=G.list[G.i];G.tries++;
-  if(id===q.id){
-    G.answered=true;btn.classList.add('right');sfx.ok();
-    renderQ(q,'ok');
-    const mark=(G.tries===1&&G.hint===0&&!G.mean)?'🟩':'🟨';
-    finishQ(mark,true);
-  }else{
-    sfx.ng();btn.classList.add('wrong');
-    const b=$('qbox');b.classList.add('ng');setTimeout(()=>b.classList.remove('ng'),350);
-    if(G.mode==='practice'){
-      G.lives--;$('pLives').textContent='❤'.repeat(Math.max(0,G.lives))+'♡'.repeat(3-Math.max(0,G.lives));G.wrongs.push(q.id);
-      if(G.lives<=0){reveal(q);G.answered=true;showAnswerInfo(q);setTimeout(()=>practiceOver(),1200);return;}
-      $('pMsg').textContent='ちがう… 残り ❤'+G.lives;
-    }else if(G.mode==='tut'){
-      $('pMsg').textContent='おしい! 白地に赤い丸、日の丸の国です';
-    }else{
-      if(G.tries>=2){reveal(q);G.answered=true;finishQ('🟥',false);return;}
-      $('pMsg').textContent='おしい! もう一度';
+    sound.ng(); game.tries++;
+    mark(id, 'ng', true); label(id);
+    var b = bearing(byId[id].ll, byId[goal].ll);
+    if (game.tries < 2) {
+      feedback('そこは' + byId[id].name + '。もっと ' + b.dir + ' へ約' + km(b.km) + 'km', 'ng', 2400);
+      setTimeout(function () { if (game && byId[id]) { mark(id, 'ng', false); labels.innerHTML = ''; } }, 1500);
+      return;
     }
+    reveal(false);
   }
-}
-function reveal(q){sfx.reveal();renderQ(q,'rev');
-  document.querySelectorAll('.ch').forEach(b=>{if(+b.dataset.id===q.id)b.classList.add('right');});}
-function showAnswerInfo(q){
-  const p=P(q.id);
-  const m=$('ymean');m.className='ymean on';
-  m.innerHTML=`<b>${flagOf(p)} ${p.n}</b><br>首都: ${p.cap} ／ ${REGIONS[p.reg]}・${p.sub}<br>面積: ${p.area.toLocaleString()} km²`;
-  $('hintRow').style.display='none';
-}
-function finishQ(mark,ok){
-  const q=G.list[G.i];
-  if(ok&&G.mode!=='tut'){if(!S.seen[q.id])S.seen[q.id]=dayKey();S.stats.correct++;save();}
-  showAnswerInfo(q);
-  $('pMsg').className='msg';$('pMsg').textContent=ok?(mark==='🟩'?'正解!':'正解'):'残念…';
-  if(G.mode==='tut'){$('bNext').style.display='';$('bNext').textContent='今日の5問へ ▶';return;}
-  if(G.mode==='practice'){G.score++;$('bNext').style.display='';$('bNext').textContent='次へ ▶';return;}
-  G.marks.push(mark);$('bNext').style.display='';$('bNext').textContent=G.i<4?'次へ ▶':'結果を見る ▶';
-}
-function next(){
-  sfx.tap();
-  if(G.mode==='tut'){S.tut=true;save();Native.track('tutorial_complete');toast('準備OK! 今日の5問へ');startDaily();return;}
-  if(G.mode==='practice'){
-    G.i++;if(G.i>=G.list.length){G.list=practiceList();G.i=0;}
-    if(G.score>0&&G.score%8===0&&adsUnlocked())Native.interstitial(()=>loadQ());else loadQ();
-    return;
+  function reveal(skipped) {
+    var goal = game.ids[game.i];
+    game.lock = true;
+    game.log.push({ id: goal, r: 0 });
+    S.lv[goal] = Math.max(0, lv(goal) - 1); S.miss[goal] = Date.now(); S.asked++; save();
+    mark(goal, 'goal', true); label(goal);
+    feedback(skipped ? byId[goal].name + 'はここ' : '正解は ' + byId[goal].name, 'ng', 2200);
+    flyToBox(boxAround(goal, 60), true);
+    setTimeout(function () { if (!game) return; next(); }, 2300);
   }
-  if(G.i<4){G.i++;loadQ();}else dailyDone();
-}
-// ヒント: 「ヒントを見る」(今日の5問は1問1回まで無料) / 2つ消す(動画)
-function hintText(q){
-  const p=P(q.id);
-  if(q.type==='cap')return `国旗は ${flagOf(p)}`;      // 首都の問題は国旗がヒント
-  return `${p.sub}の国。首都は「${[...p.cap][0]}…」`;   // 国旗・地図
-}
-function meaningHint(){
-  const q=G.list[G.i];
-  const doIt=()=>{G.mean=true;S.stats.hints++;save();
-    if(q.type==='cap')renderQ(q);else{const m=$('ymean');m.className='ymean on';m.innerHTML=`💡 ${hintText(q)}`;}
-    $('bMean').disabled=true;};
-  if(G.mode==='practice')Native.rewarded('ヒントを見る','動画を見ると、この国のヒントが見られます。',doIt,()=>{});
-  else doIt();
-}
-function removeTwo(){
-  const q=G.list[G.i];
-  Native.rewarded('ヒント','動画を見ると、まちがいの候補を2つ消せます。',()=>{
-    G.hint++;S.stats.hints++;save();
-    const cand=[...document.querySelectorAll('.ch')].filter(b=>+b.dataset.id!==q.id&&!b.classList.contains('off')&&!b.classList.contains('wrong'));
-    shuffle(cand).slice(0,2).forEach(b=>b.classList.add('off'));
-    if(!Native.isPremium())$('bHint').disabled=true;toast('候補を2つ消しました');
-  },()=>{});
-}
-function dailyDone(){
-  const k=keyFromN(G.n),today=dayKey();
-  if(G.mode==='daily'){S.streak=(S.lastDay===yKey())?S.streak+1:(S.lastDay===today?S.streak:1);S.lastDay=today;}
-  else S.stats.archive++;
-  const perfect=G.marks.every(m=>m==='🟩');if(perfect)S.stats.perfect++;
-  const rec={n:G.n,marks:G.marks,ids:G.list.map(q=>q.id),types:G.list.map(q=>q.type),streak:S.streak,mode:G.mode};
-  S.daily[k]=rec;save();Native.track(G.mode==='daily'?'daily_complete':'archive_complete',{n:G.n,correct:G.marks.filter(m=>m!=='🟥').length,streak:S.streak});showDailyResult(rec,true);checkBadges();
-}
-function showDailyResult(rec,fresh=false){
-  const isToday=rec.n===todayN();
-  $('rTitle').textContent=(isToday?'今日の5問':'過去問 '+keyFromN(rec.n))+' #'+rec.n;
-  const g=rec.marks.filter(m=>m==='🟩').length;
-  $('rBig').textContent=g===5?'満点!':g>=4?'お見事':g>=3?'いい感じ':g>=1?'まずまず':'次はきっと';
-  $('rTiles').textContent=rec.marks.join('');
-  $('rStreakCard').style.display=isToday?'':'none';$('rStreak').textContent=S.streak;
-  $('rList').innerHTML=rec.ids.map((id,i)=>resHTML(P(id),rec.marks[i],rec.types&&rec.types[i])).join('');
-  $('rList').querySelectorAll('.res').forEach((e,i)=>{e.style.cursor='pointer';e.onclick=()=>{const p=P(rec.ids[i]);modal(p.n,prefInfo(p),null,null,'OK',p.id);};});
-  const st=$('stamp');st.className='stamp';
-  show('result');
-  if(fresh&&g===5){setTimeout(()=>{st.className='stamp on';sfx.perfect();},250);}
-  G={mode:'view',rec};
-}
-function practiceOver(){
-  if(!G.continued){
-    Native.rewarded('コンティニュー?','動画を見ると ❤ を1つ回復して続けられます。',()=>{G.continued=true;G.lives=1;G.i++;if(G.i>=G.list.length){G.list=practiceList();G.i=0;}loadQ();},()=>practiceEnd());
-  }else practiceEnd();
-}
-function practiceEnd(){
-  if(G.score>S.best)S.best=G.score;
-  if(G.score>S.stats.practiceBest)S.stats.practiceBest=G.score;save();
-  Native.track('practice_end',{score:G.score,continued:G.continued?1:0});$('prScore').textContent=G.score;$('prBest').textContent=S.best;
-  const ids=[...new Set(G.wrongs)];
-  $('prList').innerHTML=ids.map(id=>resHTML(P(id))).join('')||'<div style="color:var(--sub);font-size:13px">なし</div>';
-  show('presult');checkBadges();
-}
-function share(){
-  const rec=G&&G.rec;if(!rec)return;
-  const text=`ぽちっと世界の国 #${rec.n} ${rec.marks.join('')}${rec.mode==='daily'?` 🔥${rec.streak}日目`:''}\n国旗と地図と首都で国名、わかる？`;
-  Native.track('share',{method:'result',content_type:rec.mode});Native.share(text);
-}
-
-// ================= 過去問カレンダー =================
-let calY,calM;
-function openArchive(){const d=new Date();calY=d.getFullYear();calM=d.getMonth();renderCal();show('archive');}
-function renderCal(){
-  const first=new Date(calY,calM,1),last=new Date(calY,calM+1,0);
-  $('calTitle').textContent=`${calY}年${calM+1}月`;
-  const minM=new Date(EPOCH.getFullYear(),EPOCH.getMonth(),1),now=new Date();
-  $('calPrev').disabled=first<=minM;$('calNext').disabled=(calY>now.getFullYear())||(calY===now.getFullYear()&&calM>=now.getMonth());
-  const cal=$('cal');cal.innerHTML=['日','月','火','水','木','金','土'].map(d=>`<div class="dow">${d}</div>`).join('');
-  for(let i=0;i<first.getDay();i++){const e=document.createElement('div');e.className='day off';cal.appendChild(e);}
-  const tN=todayN();
-  for(let d=1;d<=last.getDate();d++){
-    const dt=new Date(calY,calM,d),n=dayIndex(dt),k=dayKey(dt),rec=S.daily[k];
-    const e=document.createElement('div');e.className='day';e.innerHTML=`<span>${d}</span>`;
-    if(n<1||n>tN){e.classList.add('na');}
-    else{
-      if(n===tN)e.classList.add('today');
-      if(rec){e.classList.add('done');e.innerHTML+=`<div class="m">${rec.marks.map(m=>`<i class="${m==='🟩'?'g':m==='🟨'?'y':'r'}"></i>`).join('')}</div>`;}
-      e.onclick=()=>{sfx.tap();n===tN?startDaily():startArchive(n);};
-    }
-    cal.appendChild(e);
+  function next() {
+    if (!game) return;
+    game.i++;
+    if (game.i >= game.ids.length) { endGame(false); return; }
+    ask();
   }
-}
+  $('skipBtn').onclick = function () { if (!game || game.lock) return; sound.tap(); reveal(true); };
+  $('hintBtn').onclick = function () {
+    if (!game || game.lock || game.hinted) return;
+    sound.tap();
+    var useHint = function () {
+      game.hinted = true;
+      var goal = byId[game.ids[game.i]];
+      // 同じ小地域の国だけを残して、そのあたりに寄る
+      var near = C.filter(function (c) { return c.sub === goal.sub; }).map(function (c) { return c.id; });
+      C.forEach(function (c) { if (near.indexOf(c.id) < 0) mark(c.id, 'dim', true); });
+      flyToBox(boxOf(near), true, 30, kMin * 12);
+      feedback('ヒント：' + goal.sub + 'のどこか', '', 2200);
+    };
+    if (Native.premium()) { useHint(); return; }
+    if (game.hints > 0) { game.hints--; useHint(); ask_refreshHint(); return; }
+    Native.reward('ヒントを使う', '動画を見ると、ヒントが1回使えます。', useHint, function () {});
+  };
+  function ask_refreshHint() { $('hintBtn').textContent = game.hints > 0 ? '💡 ヒント（あと' + game.hints + '回）' : '💡 ヒント（動画）'; }
 
-// ================= 設定 =================
-const OTHER_APPS=[
-  {n:'ぽちっと漢字',d:'まんなかの漢字を当てる毎日3問',id:'6811293101'},
-  {n:'ぽちっと四字熟語',d:'□に入る漢字を選ぶ毎日5問',id:'6818395412'},
-  {n:'ぽちっと反射神経',d:'反応速度で反射神経年齢を測定',id:'6818035906'},
-  {n:'押すな！ボタン',d:'押してはいけないボタンを避けるバカゲー',id:'6793996412'},
-];
-function renderSettings(){
-  $('swSound').classList.toggle('on',S.sound);$('swNotif').classList.toggle('on',S.notif);$('notifTime').value=S.notifTime;
-  $('otherApps').innerHTML=OTHER_APPS.map(a=>`<a class="res" style="text-decoration:none;color:inherit" href="https://apps.apple.com/jp/app/id${a.id}" target="_blank" rel="noopener"><span>${a.n}</span><span class="w">${a.d} ›</span></a>`).join('');
-}
+  function endGame(quit) {
+    var g = game; game = null;
+    document.body.classList.remove('playing');
+    clearMarks(); paintLevels(true); updateProgress();
+    S.games++; save();
+    if (!g || !g.log.length) { fitWorld(true); updateAd(); return; }
+    sound.end();
+    Native.track('play_end', { score: g.score, n: g.log.length });
+    var max = g.log.length * 2, missed = g.log.filter(function (x) { return !x.r; }).map(function (x) { return x.id; });
+    var html = '<div class="ph"><h2>' + (quit ? 'ここまでの結果' : 'けっか') + '</h2><button data-close>✕</button></div>' +
+      '<div class="big">' + g.score + '<small>/ ' + max + '点</small></div>' +
+      '<div class="cap">◎ 1回で正解 2点 ・ ○ 2回目で正解 1点</div>' +
+      '<div class="rlist">' + g.log.map(function (x) {
+        var c = byId[x.id];
+        return '<div>' + flag(c) + ' ' + c.name + '<span class="m ' + ['c', 'b', 'a'][x.r] + '">' + ['×', '○', '◎'][x.r] + '</span></div>';
+      }).join('') + '</div>' +
+      (missed.length ? '<button class="btn" id="again2">まちがえた ' + missed.length + 'か国をもう一度</button>' : '') +
+      '<button class="btn' + (missed.length ? ' sub' : '') + '" id="again">つづけて場所あて</button>' +
+      '<button class="btn sub" id="shr">結果をシェア</button>';
+    panel(html);
+    var after = function (fn) { if (S.games >= 3 && S.games % 3 === 0) Native.interstitial(fn); else fn(); };
+    $('again').onclick = function () { sound.tap(); after(function () { startGame(pool(setup.area, setup.level), null); }); };
+    if ($('again2')) $('again2').onclick = function () { sound.tap(); after(function () { startGame(missed.map(function (id) { return byId[id]; }), missed); }); };
+    $('shr').onclick = function () {
+      var done = C.filter(function (c) { return lv(c.id) >= 3; }).length;
+      Native.share('せかいタッチで場所あて ' + g.score + '/' + max + '点！\n' + g.log.map(function (x) { return ['❌', '🟡', '🟢'][x.r]; }).join('') + '\n世界の国 ' + done + '/' + C.length + 'か国 覚えた');
+    };
+    fitWorld(true);
+    updateAd();
+  }
 
-// ================= イベント =================
-$('bDaily').onclick=()=>{sfx.tap();startDaily();};
-$('bPractice').onclick=()=>{sfx.tap();startPractice();};
-$('bArchive').onclick=()=>{sfx.tap();openArchive();};
-$('bBadges').onclick=()=>{sfx.tap();renderBadges();};
-$('bZukan').onclick=()=>{sfx.tap();renderZukan();};
-$('hBadgeBox').onclick=renderBadges;$('hZukanBox').onclick=renderZukan;
-$('bHow').onclick=()=>modal('遊び方',`3種類の問題で国の名前を当てます。\n・この国旗の国は？: 国旗から当てる\n・地図のどこ？: 光っている国の名前\n・首都から当てよう: 首都がある国を当てる\n\n・毎日5問（4択3問・6択2問）。みんな同じ問題です\n・1回目で正解なら🟩、2回目かヒントを使ったら🟨、2回まちがえたら🟥\n・「ヒントを見る」は今日の5問なら各問1回無料\n・正解した国は図鑑に集まります（${PREF.length}か国コンプリートを目指そう）\n・練習モードは❤3つでどこまで続くか挑戦`);
-$('bSettings').onclick=()=>{sfx.tap();renderSettings();show('settings');};
-$('bQuit').onclick=()=>modal('やめますか?',G&&G.mode==='practice'?'練習の記録は保存されません。':'途中の回答は保存されません(最初からになります)。',()=>renderHome(),()=>{});
-$('bNext').onclick=next;$('bHint').onclick=()=>{sfx.tap();removeTwo();};$('bMean').onclick=()=>{sfx.tap();meaningHint();};
-$('bResHome').onclick=renderHome;$('bResPractice').onclick=startPractice;$('bResArchive').onclick=openArchive;$('bShare').onclick=share;
-$('bPResHome').onclick=renderHome;$('bPHome').onclick=renderHome;$('bPAgain').onclick=startPractice;
-$('bArcHome').onclick=renderHome;$('calPrev').onclick=()=>{calM--;if(calM<0){calM=11;calY--;}renderCal();};$('calNext').onclick=()=>{calM++;if(calM>11){calM=0;calY++;}renderCal();};
-$('bBadHome').onclick=renderHome;$('bSetHome').onclick=renderHome;$('bZukHome').onclick=renderHome;
-$('bTutAgain').onclick=()=>{S.tut=false;save();startTutorial();};
-$('bReset').onclick=()=>modal('記録をリセット','連続記録・図鑑・バッジ・履歴を消します。よろしいですか?',()=>{const keep={sound:S.sound,notif:S.notif,notifTime:S.notifTime};S=Object.assign(JSON.parse(JSON.stringify(DEF)),keep);S.firstDay=dayKey();save();toast('リセットしました');renderHome();},()=>{});
-$('swSound').onclick=()=>{S.sound=!S.sound;save();renderSettings();sfx.tap();};
-$('swNotif').onclick=()=>{S.notif=!S.notif;save();renderSettings();Native.scheduleDaily(S.notifTime,S.notif);};
-$('notifTime').onchange=e=>{S.notifTime=e.target.value;save();toast('通知時刻: '+S.notifTime);Native.scheduleDaily(S.notifTime,S.notif);};
-$('bBuy').onclick=()=>{sfx.tap();Native.buyPremium();};
-$('bRestore').onclick=()=>{sfx.tap();Native.restore();};
+  /* ========== きろく ========== */
+  function openStats() {
+    select(null); paintLevels(true); fitWorld(true);
+    var count = [0, 0, 0, 0]; C.forEach(function (c) { count[lv(c.id)]++; });
+    var weak = Object.keys(S.miss).map(Number).sort(function (a, b) { return S.miss[b] - S.miss[a]; }).slice(0, 12);
+    var html = '<div class="ph"><h2>📊 きろく</h2><button data-close>✕</button></div>' +
+      '<div class="legend"><span><i style="background:var(--land)"></i>まだ ' + count[0] + '</span><span><i style="background:var(--l1)"></i>☆1 ' + count[1] + '</span><span><i style="background:var(--l2)"></i>☆2 ' + count[2] + '</span><span><i style="background:var(--l3)"></i>覚えた ' + count[3] + '</span></div>' +
+      AREAS.slice(1).map(function (a) { var p = pool(a.k, 'all'), r = prog(p); return '<div class="reg"><b>' + a.e + ' ' + a.n + '</b><div class="bar"><i style="width:' + r + '%"></i></div><span>' + p.filter(function (c) { return lv(c.id) >= 3; }).length + '/' + p.length + '</span></div>'; }).join('') +
+      '<div class="cap" style="margin-top:10px">場所あて ' + S.games + '回 ・ 正解率 ' + (S.asked ? Math.round(S.right / S.asked * 100) : 0) + '% ・ 見た国 ' + Object.keys(S.seen).length + '</div>' +
+      (weak.length ? '<div class="sec">にがてな国（タップで地図へ）</div><div class="list">' + weak.map(function (id) { var c = byId[id]; return '<a class="item" data-id="' + id + '">' + flag(c) + ' ' + c.name + '<span>' + c.sub + ' ›</span></a>'; }).join('') + '</div>' : '') +
+      '<p class="foot">地図の色は、そのまま覚えた度合いです。場所あてで1回で正解すると☆が1つ増え、3つで「覚えた」になります。</p>' +
+      '<button class="btn sub" data-close2>地図を見る</button>';
+    panel(html);
+    $('pbox').querySelectorAll('.item[data-id]').forEach(function (a) { a.onclick = function () { closePanel(); select(+a.dataset.id, true); }; });
+    $('pbox').querySelector('[data-close2]').onclick = function () { closePanel(); };
+  }
 
-// ================= 広告・課金 =================
-// インタースティシャルは初回起動から3日目以降、練習モードの区切りでのみ(最初の体験を守る)
-function adsUnlocked(){
-  if(Native.isPremium()||!S.firstDay)return false;
-  return (mid(new Date())-mid(new Date(S.firstDay)))/DAY>=2;
-}
-window.onPremiumChanged=v=>{applyPremium();if(v)modal('ありがとうございます','広告なし+ヒント無制限になりました。');};
-function applyPremium(){
-  const p=Native.isPremium();
-  document.body.classList.toggle('has-banner',!p&&Native.isApp);
-  const b=$('bBuy');if(b){b.disabled=p;b.textContent=p?'購入済み':'購入';}
-  const n=$('buyNote');if(n)n.textContent=p?'購入済み。広告は表示されません':'¥300 買い切り';
-}
-function updateBanner(){Native.banner(!Native.isPremium()&&$('home').classList.contains('on'));}
-const _show=show;show=id=>{_show(id);updateBanner();};
+  /* ========== 設定 ========== */
+  function openSettings() {
+    var html = '<div class="ph"><h2>⚙️ 設定</h2><button data-close>✕</button></div>' +
+      '<div class="list"><div class="item" id="sSound">効果音<div class="sw ' + (S.sound ? 'on' : '') + '"></div></div></div>' +
+      '<div class="sec">広告なし</div><div class="list">' +
+      '<div class="item" id="sBuy">広告なし＋ヒント使い放題<span>' + (Native.premium() ? '購入済み' : '¥300（買い切り） ›') + '</span></div>' +
+      '<div class="item" id="sRestore">購入を復元<span>›</span></div></div>' +
+      '<div class="sec">このアプリについて</div><div class="list">' +
+      '<a class="item" href="https://pochitto356.github.io/pochittosekai-privacy.html" target="_blank" rel="noopener">プライバシーポリシー<span>›</span></a>' +
+      '<a class="item" href="https://pochitto356.github.io/policies/support/" target="_blank" rel="noopener">サポート・お問い合わせ<span>›</span></a>' +
+      '<div class="item" id="sReset" style="color:var(--bad)">記録をリセット<span>›</span></div></div>' +
+      '<p class="foot">地図データ：Natural Earth（パブリックドメイン）<br>国境・国名の表示は学習用の目安で、特定の立場を示すものではありません。<br>せかいタッチ v1.0.0 ・ pochitto games</p>';
+    panel(html);
+    $('sSound').onclick = function () { S.sound = !S.sound; save(); openSettings(); sound.tap(); };
+    $('sBuy').onclick = function () { if (!Native.premium()) Native.buy(); };
+    $('sRestore').onclick = function () { Native.restore(); };
+    $('sReset').onclick = function () { UI.dialog('記録をリセット', '覚えた度合いと記録をすべて消します。購入は消えません。', function () { var keep = S.sound; S = blank(); S.sound = keep; save(); paintLevels(true); updateProgress(); toast('リセットしました'); }, function () {}, 'リセット'); };
+  }
 
-if(!S.firstDay){S.firstDay=dayKey();save();}
-applyPremium();
-renderHome();
-Native.init().then(()=>{applyPremium();updateBanner();Native.scheduleDaily(S.notifTime,S.notif);});
+  /* ========== 起動 ========== */
+  function onPremium(on) { if (on) toast('広告を消しました。ありがとうございます！'); updateAd(); if (tab === 'settings') openSettings(); }
+  function init() {
+    buildMap();
+    paintLevels(true); updateProgress();
+    onTap = function (id) { if (game) playTap(id); else exploreTap(id); };
+    document.querySelectorAll('#tabs button').forEach(function (b) { b.onclick = function () { sound.tap(); setTab(b.dataset.tab); }; });
+    $('q').addEventListener('focus', function () { select(null); });
+    // 最初は日本のあたりから
+    flyToBox(boxAround(192, 260), false);
+    updateAd();
+    Native.start().then(updateAd);
+  }
+
+  return { init: init, onPremium: onPremium, _s: function () { return S; }, _g: function () { return game; }, _byId: byId };
+})();
+App.init();
