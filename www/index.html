@@ -29,7 +29,9 @@ button{font-family:inherit}
 .c.goal{animation:goal 1s ease-in-out infinite;opacity:1}
 @keyframes goal{50%{fill:#ffd23f}}
 .o{fill:var(--other);stroke:var(--edge);stroke-width:.4;vector-effect:non-scaling-stroke;pointer-events:none}
-.dot{fill:var(--land);stroke:var(--edge);stroke-width:1;vector-effect:non-scaling-stroke}
+.dot{fill:var(--land);stroke:var(--edge);stroke-width:.8;stroke-opacity:.7;vector-effect:non-scaling-stroke;pointer-events:none;transition:opacity .2s}
+.dot.hide{opacity:0}
+.hit{fill:transparent;stroke:none}  /* 小さな国のタップ用（見えない） */
 .dot.l1{fill:var(--l1)}.dot.l2{fill:var(--l2)}.dot.l3{fill:var(--l3)}
 .dot.sel{fill:var(--sel)}.dot.ok{fill:var(--l3)}.dot.ng{fill:var(--bad)}.dot.goal{animation:goal 1s infinite}
 .lbl{font-size:12px;font-weight:800;fill:var(--ink);paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none;text-anchor:middle}
@@ -61,9 +63,9 @@ body.playing .zoom{bottom:calc(var(--safe-b) + 76px)}
 body.playing.has-ad .zoom{bottom:calc(var(--safe-b) + 132px)}
 
 /* 国カード */
-.sheet{position:fixed;left:12px;right:12px;bottom:calc(var(--safe-b) + 84px);background:var(--card);border-radius:20px;box-shadow:0 8px 28px rgba(20,40,70,.22);padding:14px 16px;z-index:15;transform:translateY(140%);transition:transform .25s;max-height:46vh;overflow-y:auto}
+.sheet{position:fixed;left:12px;right:12px;bottom:calc(var(--safe-b) + 84px);background:var(--card);border-radius:20px;box-shadow:0 8px 28px rgba(20,40,70,.22);padding:14px 16px;z-index:15;transform:translateY(calc(100% + 240px));visibility:hidden;transition:transform .25s,visibility 0s .25s;max-height:46vh;overflow-y:auto}
 body.has-ad .sheet{bottom:calc(var(--safe-b) + 140px)}
-.sheet.on{transform:none}
+.sheet.on{transform:none;visibility:visible;transition:transform .25s}  /* 閉じた状態で上のふちがのぞかないように */
 .sheet .x{position:absolute;right:10px;top:10px;width:30px;height:30px;border-radius:50%;border:0;background:#f0f3f7;font-size:15px;color:var(--sub)}
 .kh{display:flex;align-items:center;gap:12px}
 .flag{font-size:44px;line-height:1}

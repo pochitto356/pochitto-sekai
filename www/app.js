@@ -78,6 +78,7 @@ var App = (function () {
   var svg, cam, labels, view = { k: 1, x: 0, y: 0 }, kMin = 1, kMax = 30;
   var shapes = {};   // id -> 要素（パス or 点）
 
+  var hits = {};
   function buildMap() {
     svg = document.createElementNS(NS, 'svg');
     cam = document.createElementNS(NS, 'g');
@@ -88,8 +89,10 @@ var App = (function () {
         var p = document.createElementNS(NS, 'path'); p.setAttribute('class', 'c'); p.setAttribute('d', c.d); p.dataset.id = c.id; cam.appendChild(p);
         if (!c.dot) { shapes[c.id] = p; return; }
       }
+      // 小さな国：見える点は小さく、タップできる範囲は見えない大きめの円で取る
+      var hit = document.createElementNS(NS, 'circle'); hit.setAttribute('class', 'hit'); hit.setAttribute('cx', c.c[0]); hit.setAttribute('cy', c.c[1]); hit.dataset.id = c.id;
       var o = document.createElementNS(NS, 'circle'); o.setAttribute('class', 'dot'); o.setAttribute('cx', c.c[0]); o.setAttribute('cy', c.c[1]); o.dataset.id = c.id;
-      dots.appendChild(o); shapes[c.id] = o;
+      dots.appendChild(hit); dots.appendChild(o); shapes[c.id] = o; hits[c.id] = hit;
     });
     cam.appendChild(dots);
     labels = document.createElementNS(NS, 'g'); cam.appendChild(labels);
@@ -102,8 +105,16 @@ var App = (function () {
   function screen() { return { w: window.innerWidth, h: window.innerHeight }; }
   function applyView() {
     cam.setAttribute('transform', 'translate(' + view.x.toFixed(1) + ',' + view.y.toFixed(1) + ') scale(' + view.k.toFixed(4) + ')');
-    var r = Math.min(6, 3 + 3 * (view.k / kMin - 1) / 4) / view.k;  // 世界全体では小さく、拡大すると見やすく
-    for (var id in shapes) if (shapes[id].tagName === 'circle') shapes[id].setAttribute('r', r.toFixed(3));
+    // 小さな国の点：世界全体では目立たない大きさ、拡大すると少し大きく。国の形が十分大きく見えたら点は消す
+    var r = Math.min(4, 2 + 2 * (view.k / kMin - 1) / 4) / view.k, hr = 8 / view.k;   // 当たり判定は半径8px（海の上は hit() がさらに18pxまで拾う）
+    for (var id in hits) {
+      hits[id].setAttribute('r', hr.toFixed(3));
+      var o = shapes[id], c = byId[id]; o.setAttribute('r', r.toFixed(3));
+      var big = c.d && c.b && (c.b[2] - c.b[0]) * view.k > 14 && (c.b[3] - c.b[1]) * view.k > 14;
+      var marked = /\b(sel|ok|ng|goal)\b/.test(o.getAttribute('class') || '');
+      o.classList.toggle('hide', big && !marked);
+      hits[id].style.pointerEvents = big ? 'none' : '';   // 形が見えたら形のほうをタップ
+    }
     var fs = 14 / view.k;
     for (var i = 0; i < labels.childNodes.length; i++) { var t = labels.childNodes[i]; t.style.fontSize = fs.toFixed(3) + 'px'; t.style.strokeWidth = (3 / view.k) + 'px'; }
   }
