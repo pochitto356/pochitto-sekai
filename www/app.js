@@ -64,7 +64,7 @@ var App = (function () {
   var toastT = 0;
   function toast(t) { var e = $('toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(function () { e.classList.remove('on'); }, 1800); }
   var fbT = 0;
-  function feedback(t, kind, ms) { var e = $('fb'); e.textContent = t; e.className = 'fb on ' + (kind || ''); clearTimeout(fbT); fbT = setTimeout(function () { e.className = 'fb'; }, ms || 1600); }
+  function feedback(t, kind, ms) { var e = $('fb'); e.textContent = t; e.style.top = document.body.classList.contains('quizzing') ? ($('qcard').getBoundingClientRect().bottom + 10) + 'px' : ''; e.className = 'fb on ' + (kind || ''); clearTimeout(fbT); fbT = setTimeout(function () { e.className = 'fb'; }, ms || 1600); }
   function km(n) { return n >= 1000 ? (Math.round(n / 100) * 100).toLocaleString() : String(Math.round(n / 10) * 10); }
   function areaText(a) {
     if (!a) return '0.44km²';
@@ -126,6 +126,7 @@ var App = (function () {
   function flyToBox(b, anim, pad, maxK) {
     var s = screen(), top = 80, bottom = document.body.classList.contains('playing') ? 90 : 110;
     if (document.body.classList.contains('has-ad')) bottom += 56;
+    if (document.body.classList.contains('quizzing')) { top = $('qcard').offsetHeight + 24; bottom = $('choices').offsetHeight + 24; }
     if ($('sheet').classList.contains('on')) bottom = Math.max(bottom, s.h * 0.45);
     pad = pad == null ? 24 : pad;
     var bw = Math.max(b[2] - b[0], 4), bh = Math.max(b[3] - b[1], 4);
@@ -271,16 +272,17 @@ var App = (function () {
     tab = t;
     document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === t); });
     if (t === 'play') openSetup();
+    else if (t === 'quiz') openQuizSetup();
     else if (t === 'stats') openStats();
     else if (t === 'settings') openSettings();
     else { closePanel(); }
     updateAd();
   }
-  function closePanel() { $('panel').classList.remove('on'); if (tab !== 'explore' && !game) { tab = 'explore'; document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === 'explore'); }); } updateAd(); }
+  function closePanel() { $('panel').classList.remove('on'); if (tab !== 'explore' && !game && !quiz) { tab = 'explore'; document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === 'explore'); }); } updateAd(); }
   function panel(html) { $('pbox').innerHTML = html; $('panel').classList.add('on'); var x = $('pbox').querySelector('[data-close]'); if (x) x.onclick = function () { sound.tap(); closePanel(); paintLevels(true); clearMarks(); }; }
-  $('panel').addEventListener('click', function (e) { if (e.target === $('panel') && !game) { closePanel(); clearMarks(); paintLevels(true); } });
+  $('panel').addEventListener('click', function (e) { if (e.target === $('panel') && !game && !quiz) { closePanel(); clearMarks(); paintLevels(true); } });
   function updateAd() {
-    var show = !game && !$('panel').classList.contains('on') && !Native.premium();
+    var show = !game && !quiz && !$('panel').classList.contains('on') && !Native.premium();
     Native.banner(show);
     document.body.classList.toggle('has-ad', show && Native.inApp);
   }
@@ -493,6 +495,180 @@ var App = (function () {
     updateAd();
   }
 
+  /* ========== クイズ（国旗・首都・形 → 国名の4択/6択） ==========
+   * 答えるたびに地図がその国へ動いて光る。地図で覚えるための選択式クイズ。
+   * ☆はクイズでは2つまで。3つ目（覚えた）は「場所あて」で付く。 */
+  var QTYPES = [
+    { k: 'flag', n: '国旗', e: '🚩', ask: 'この国旗の国は？' },
+    { k: 'cap', n: '首都', e: '🏛️', ask: '首都がこの都市の国は？' },
+    { k: 'shape', n: '形', e: '🗺️', ask: '光っている国は？' }
+  ];
+  // 首都名が国名とほぼ同じ国・首都に議論や移転がある国は首都問題に出さない
+  var NO_CAP = ['イスラエル', 'ナウル', '赤道ギニア'];
+  var qset = { type: 'flag', area: 0, level: 'easy', n: 4 };
+  try { Object.assign(qset, JSON.parse(localStorage.getItem('st_qset') || '{}')); } catch (e) {}
+  function qpool(type, area, level) {
+    return pool(area, level).filter(function (c) {
+      if (type === 'cap') return NO_CAP.indexOf(c.name) < 0 && c.cap.indexOf(c.name) !== 0;
+      if (type === 'shape') return !c.dot || level === 'all';
+      return true;
+    });
+  }
+  function shuffle(a) { for (var i = a.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+  // まぎらわしい選択肢：となりの国 → 同じ小地域 → 同じ地域 → それ以外
+  function dummies(c, n, type) {
+    var out = [], seen = {}; seen[c.id] = 1;
+    var ok = function (x) { return !seen[x.id] && (type !== 'cap' || (NO_CAP.indexOf(x.name) < 0)); };
+    var add = function (list) { shuffle(list.slice()).forEach(function (x) { if (out.length < n && ok(x)) { seen[x.id] = 1; out.push(x); } }); };
+    add(c.adj.map(function (a) { return byId[a]; }).slice(0, Math.ceil(n / 2)));
+    add(C.filter(function (x) { return x.sub === c.sub; }));
+    add(C.filter(function (x) { return x.reg === c.reg; }));
+    add(C);
+    return out;
+  }
+  function openQuizSetup() {
+    var html = '<div class="ph"><h2>🚩 クイズ</h2><button data-close>✕</button></div>' +
+      '<p class="lead">国旗・首都・形を見て、国名を選ぶクイズ。答えるたびに地図がその国へ動くので、場所もいっしょに覚えられます。</p>' +
+      '<div class="qtypes">' + QTYPES.map(function (t) { return '<button class="qt ' + (qset.type === t.k ? 'on' : '') + '" data-t="' + t.k + '"><b>' + t.e + '</b>' + t.n + '</button>'; }).join('') + '</div>' +
+      '<div class="sec">地域</div><div class="chips">' + AREAS.map(function (a) { return '<button class="' + (qset.area === a.k ? 'on' : '') + '" data-a="' + a.k + '">' + a.e + ' ' + a.n + '</button>'; }).join('') + '</div>' +
+      '<div class="seg" id="qlv">' + LEVELS.map(function (l) { return '<button data-l="' + l.k + '" class="' + (qset.level === l.k ? 'on' : '') + '">' + l.n + '</button>'; }).join('') + '</div>' +
+      '<div class="seg" id="qn"><button data-n="4" class="' + (qset.n === 4 ? 'on' : '') + '">4択</button><button data-n="6" class="' + (qset.n === 6 ? 'on' : '') + '">6択</button></div>' +
+      '<div class="cap" id="qinfo"></div>' +
+      '<button class="btn" id="qgo">スタート</button>';
+    panel(html);
+    var info = function () {
+      var n = qpool(qset.type, qset.area, qset.level).length, d = LEVELS.filter(function (l) { return l.k === qset.level; })[0].d;
+      $('qinfo').textContent = d + '・' + n + 'か国から ' + Math.min(10, n) + '問';
+      $('qgo').disabled = n < 1;
+    };
+    var bind = function (sel, key, num) {
+      $('pbox').querySelectorAll(sel).forEach(function (b) {
+        b.onclick = function () { sound.tap(); var v = b.getAttribute(sel.slice(1, -1)); qset[key] = num ? +v : v; $('pbox').querySelectorAll(sel).forEach(function (x) { x.classList.toggle('on', x === b); }); info(); };
+      });
+    };
+    bind('[data-t]', 'type'); bind('[data-a]', 'area', true); bind('[data-l]', 'level'); bind('[data-n]', 'n', true);
+    info();
+    $('qgo').onclick = function () { sound.tap(); try { localStorage.setItem('st_qset', JSON.stringify(qset)); } catch (e) {} startQuiz(qpool(qset.type, qset.area, qset.level), null); };
+  }
+
+  var quiz = null;
+  function startQuiz(list, fixed) {
+    closePanel(); select(null);
+    var ids = fixed || pick(list, Math.min(10, list.length));
+    quiz = { type: qset.type, n: qset.n, ids: ids, i: 0, score: 0, log: [], hints: 1, box: boxOf(list.map(function (c) { return c.id; })), done: false };
+    document.body.classList.add('quizzing');
+    paintLevels(false); updateAd();
+    Native.track('quiz_start', { type: quiz.type, area: qset.area, level: qset.level, n: quiz.n });
+    qAsk();
+  }
+  function qAsk() {
+    clearMarks();
+    var c = byId[quiz.ids[quiz.i]], t = QTYPES.filter(function (x) { return x.k === quiz.type; })[0];
+    quiz.done = false; quiz.hinted = false;
+    var q = quiz.type === 'flag' ? '<div class="qflag">' + flag(c) + '</div>' :
+      quiz.type === 'cap' ? '<div class="qcap">' + c.cap + '</div>' : '';
+    $('qcard').innerHTML = '<div class="qtop"><span class="qn">' + t.e + ' ' + t.n + 'クイズ　' + (quiz.i + 1) + ' / ' + quiz.ids.length + '</span><button class="quit" id="qquit">✕</button></div>' +
+      q + '<div class="qask">' + t.ask + '</div>';
+    $('qquit').onclick = function () { sound.tap(); UI.dialog('やめますか？', 'ここまでの結果は、覚えた度合いに反映されています。', endQuiz.bind(null, true), function () {}, 'やめる'); };
+    var opts = shuffle([c].concat(dummies(c, quiz.n - 1, quiz.type)));
+    $('choices').className = 'choices n' + quiz.n;
+    $('choices').innerHTML = '<div class="cgrid">' + opts.map(function (o) { return '<button data-id="' + o.id + '">' + o.name + '</button>'; }).join('') + '</div>' +
+      '<div class="crow"><button class="hint" id="qhint"></button><button class="next" id="qnext">つぎへ ›</button></div>';
+    qHintLabel();
+    $('choices').querySelectorAll('[data-id]').forEach(function (b) { b.onclick = function () { qAnswer(+b.dataset.id, b); }; });
+    $('qhint').onclick = qHint;
+    $('qnext').onclick = function () { sound.tap(); qNext(); };
+    // 形の問題はその国を光らせて寄る。ほかは出題範囲の全体を見せる
+    if (quiz.type === 'shape') { mark(c.id, 'sel', true); flyToBox(boxAround(c.id, c.dot ? 60 : 90), true, 24); }
+    else flyToBox(quiz.box, true, 16);
+  }
+  function qHintLabel() {
+    var b = $('qhint'); if (!b) return;
+    b.textContent = Native.premium() ? '💡 2つ消す' : quiz.hints > 0 ? '💡 2つ消す（あと' + quiz.hints + '回）' : '💡 2つ消す（動画）';
+  }
+  function qHint() {
+    if (!quiz || quiz.done || quiz.hinted) return;
+    sound.tap();
+    var use = function () {
+      quiz.hinted = true;
+      var goal = quiz.ids[quiz.i];
+      var wrong = shuffle([].slice.call($('choices').querySelectorAll('[data-id]')).filter(function (b) { return +b.dataset.id !== goal && !b.disabled; }));
+      wrong.slice(0, 2).forEach(function (b) { b.disabled = true; b.classList.add('gone'); });
+      $('qhint').disabled = true;
+    };
+    if (Native.premium()) { use(); return; }
+    if (quiz.hints > 0) { quiz.hints--; use(); qHintLabel(); return; }
+    Native.reward('ヒントを使う', '動画を見ると、選択肢を2つ消せます。', use, function () {});
+  }
+  function qAnswer(id, btn) {
+    if (!quiz || quiz.done) return;
+    quiz.done = true;
+    var goal = quiz.ids[quiz.i], c = byId[goal], right = id === goal;
+    $('choices').querySelectorAll('[data-id]').forEach(function (b) {
+      b.disabled = true;
+      if (+b.dataset.id === goal) b.classList.add('ok');
+      else if (b === btn) b.classList.add('ng');
+    });
+    $('qhint').style.display = 'none'; $('qnext').style.display = 'block';
+    S.quiz = S.quiz || {}; var st = S.quiz[quiz.type] = S.quiz[quiz.type] || [0, 0];
+    st[1]++; S.seen[goal] = 1;
+    if (right) {
+      sound.ok(); quiz.score++; st[0]++;
+      if (!quiz.hinted && lv(goal) < 2) S.lv[goal] = lv(goal) + 1;
+      feedback('せいかい！', 'ok', 1000);
+    } else {
+      sound.ng(); S.miss[goal] = Date.now();
+      feedback('正解は ' + c.name, 'ng', 1600);
+    }
+    quiz.log.push({ id: goal, r: right ? 2 : 0 });
+    save();
+    // 答えの国へ地図を動かして光らせる（地図で覚える）
+    clearMarks();
+    mark(goal, right ? 'ok' : 'goal', true); label(goal, flag(c) + ' ' + c.name);
+    if (!right && byId[id]) { mark(id, 'ng', true); label(id); }
+    flyToBox(right || !byId[id] ? boxAround(goal, 70) : boxOf([goal, id]), true, 30);
+    $('qcard').querySelector('.qask').innerHTML = flag(c) + ' <b>' + c.name + '</b>　首都 ' + c.cap;
+  }
+  function qNext() {
+    if (!quiz) return;
+    quiz.i++;
+    if (quiz.i >= quiz.ids.length) { endQuiz(false); return; }
+    qAsk();
+  }
+  function endQuiz(quit) {
+    var g = quiz; quiz = null;
+    document.body.classList.remove('quizzing');
+    clearMarks(); paintLevels(true); updateProgress();
+    S.qgames = (S.qgames || 0) + 1; save();
+    if (!g || !g.log.length) { fitWorld(true); updateAd(); return; }
+    sound.end();
+    Native.track('quiz_end', { type: g.type, score: g.score, n: g.log.length });
+    var t = QTYPES.filter(function (x) { return x.k === g.type; })[0];
+    var missed = g.log.filter(function (x) { return !x.r; }).map(function (x) { return x.id; });
+    var html = '<div class="ph"><h2>' + t.e + ' ' + t.n + 'クイズ ' + (quit ? 'ここまで' : 'けっか') + '</h2><button data-close>✕</button></div>' +
+      '<div class="big">' + g.score + '<small>/ ' + g.log.length + '問</small></div>' +
+      '<div class="cap">答えた国は地図でも光りました。☆3つ目は「場所あて」で付きます</div>' +
+      '<div class="rlist">' + g.log.map(function (x) {
+        var c = byId[x.id];
+        return '<div data-go="' + x.id + '">' + flag(c) + ' ' + c.name + '<span class="m ' + (x.r ? 'a' : 'c') + '">' + (x.r ? '◎' : '×') + '</span></div>';
+      }).join('') + '</div>' +
+      (missed.length ? '<button class="btn" id="qagain2">まちがえた ' + missed.length + 'か国をもう一度</button>' : '') +
+      '<button class="btn' + (missed.length ? ' sub' : '') + '" id="qagain">つづけてクイズ</button>' +
+      (missed.length ? '<button class="btn sub" id="qplace">まちがえた国を場所あてで</button>' : '') +
+      '<button class="btn sub" id="qshr">結果をシェア</button>';
+    panel(html);
+    var after = function (fn) { var n = S.games + S.qgames; if (n >= 3 && n % 3 === 0) Native.interstitial(fn); else fn(); };
+    $('pbox').querySelectorAll('[data-go]').forEach(function (d) { d.onclick = function () { closePanel(); select(+d.dataset.go, true); }; });
+    $('qagain').onclick = function () { sound.tap(); after(function () { startQuiz(qpool(qset.type, qset.area, qset.level), null); }); };
+    if ($('qagain2')) $('qagain2').onclick = function () { sound.tap(); after(function () { startQuiz(missed.map(function (id) { return byId[id]; }), missed); }); };
+    if ($('qplace')) $('qplace').onclick = function () { sound.tap(); after(function () { startGame(missed.map(function (id) { return byId[id]; }), missed); }); };
+    $('qshr').onclick = function () {
+      Native.share('せかいタッチ ' + t.n + 'クイズ ' + g.score + '/' + g.log.length + '問正解！\n' + g.log.map(function (x) { return x.r ? '🟢' : '❌'; }).join(''));
+    };
+    fitWorld(true);
+    updateAd();
+  }
+
   /* ========== きろく ========== */
   function openStats() {
     select(null); paintLevels(true); fitWorld(true);
@@ -502,8 +678,9 @@ var App = (function () {
       '<div class="legend"><span><i style="background:var(--land)"></i>まだ ' + count[0] + '</span><span><i style="background:var(--l1)"></i>☆1 ' + count[1] + '</span><span><i style="background:var(--l2)"></i>☆2 ' + count[2] + '</span><span><i style="background:var(--l3)"></i>覚えた ' + count[3] + '</span></div>' +
       AREAS.slice(1).map(function (a) { var p = pool(a.k, 'all'), r = prog(p); return '<div class="reg"><b>' + a.e + ' ' + a.n + '</b><div class="bar"><i style="width:' + r + '%"></i></div><span>' + p.filter(function (c) { return lv(c.id) >= 3; }).length + '/' + p.length + '</span></div>'; }).join('') +
       '<div class="cap" style="margin-top:10px">場所あて ' + S.games + '回 ・ 正解率 ' + (S.asked ? Math.round(S.right / S.asked * 100) : 0) + '% ・ 見た国 ' + Object.keys(S.seen).length + '</div>' +
+      (S.quiz ? '<div class="cap">' + QTYPES.filter(function (t) { return S.quiz[t.k]; }).map(function (t) { var q = S.quiz[t.k]; return t.n + 'クイズ ' + Math.round(q[0] / q[1] * 100) + '%'; }).join(' ・ ') + '</div>' : '') +
       (weak.length ? '<div class="sec">にがてな国（タップで地図へ）</div><div class="list">' + weak.map(function (id) { var c = byId[id]; return '<a class="item" data-id="' + id + '">' + flag(c) + ' ' + c.name + '<span>' + c.sub + ' ›</span></a>'; }).join('') + '</div>' : '') +
-      '<p class="foot">地図の色は、そのまま覚えた度合いです。場所あてで1回で正解すると☆が1つ増え、3つで「覚えた」になります。</p>' +
+      '<p class="foot">地図の色は、そのまま覚えた度合いです。場所あてで1回で正解すると☆が1つ増え、3つで「覚えた」になります（クイズで増えるのは☆2つまで）。</p>' +
       '<button class="btn sub" data-close2>地図を見る</button>';
     panel(html);
     $('pbox').querySelectorAll('.item[data-id]').forEach(function (a) { a.onclick = function () { closePanel(); select(+a.dataset.id, true); }; });
@@ -521,7 +698,7 @@ var App = (function () {
       '<a class="item" href="https://pochitto356.github.io/pochittosekai-privacy.html" target="_blank" rel="noopener">プライバシーポリシー<span>›</span></a>' +
       '<a class="item" href="https://pochitto356.github.io/policies/support/" target="_blank" rel="noopener">サポート・お問い合わせ<span>›</span></a>' +
       '<div class="item" id="sReset" style="color:var(--bad)">記録をリセット<span>›</span></div></div>' +
-      '<p class="foot">地図データ：Natural Earth（パブリックドメイン）<br>国境・国名の表示は学習用の目安で、特定の立場を示すものではありません。<br>せかいタッチ v1.0.0 ・ pochitto games</p>';
+      '<p class="foot">地図データ：Natural Earth（パブリックドメイン）<br>国境・国名の表示は学習用の目安で、特定の立場を示すものではありません。<br>せかいタッチ v1.1.0 ・ pochitto games</p>';
     panel(html);
     $('sSound').onclick = function () { S.sound = !S.sound; save(); openSettings(); sound.tap(); };
     $('sBuy').onclick = function () { if (!Native.premium()) Native.buy(); };
@@ -530,11 +707,11 @@ var App = (function () {
   }
 
   /* ========== 起動 ========== */
-  function onPremium(on) { if (on) toast('広告を消しました。ありがとうございます！'); updateAd(); if (tab === 'settings') openSettings(); }
+  function onPremium(on) { if (on) toast('広告を消しました。ありがとうございます！'); updateAd(); if (quiz) qHintLabel(); if (tab === 'settings') openSettings(); }
   function init() {
     buildMap();
     paintLevels(true); updateProgress();
-    onTap = function (id) { if (game) playTap(id); else exploreTap(id); };
+    onTap = function (id) { if (game) playTap(id); else if (!quiz) exploreTap(id); };
     document.querySelectorAll('#tabs button').forEach(function (b) { b.onclick = function () { sound.tap(); setTab(b.dataset.tab); }; });
     $('q').addEventListener('focus', function () { select(null); });
     // 最初は日本のあたりから
@@ -543,6 +720,6 @@ var App = (function () {
     Native.start().then(updateAd);
   }
 
-  return { init: init, onPremium: onPremium, _s: function () { return S; }, _g: function () { return game; }, _byId: byId };
+  return { init: init, onPremium: onPremium, _s: function () { return S; }, _g: function () { return game; }, _q: function () { return quiz; }, _byId: byId };
 })();
 App.init();

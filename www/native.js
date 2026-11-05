@@ -75,7 +75,7 @@ var Native = (function () {
   function startAds() {
     var a = plugins.ads;
     if (!a) return Promise.resolve();
-    return a.initialize({ initializeForTesting: CONFIG.testing }).then(loadInterstitial);
+    return a.initialize({ initializeForTesting: CONFIG.testing, maxAdContentRating: 'General' }).then(loadInterstitial);   // 年齢制限4+に合わせて一般向けの広告だけ
   }
 
   function loadInterstitial() {

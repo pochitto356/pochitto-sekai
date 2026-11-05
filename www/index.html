@@ -142,6 +142,43 @@ body.playing.has-ad .hintbar{bottom:calc(var(--safe-b) + 70px)}
 .sw.on{background:var(--l3)}.sw.on::after{left:23px}
 .foot{font-size:11px;color:var(--sub);text-align:center;line-height:1.7;margin-top:14px}
 
+
+/* クイズ */
+body.quizzing .top,body.quizzing .tabs{display:none}
+.qcard{position:fixed;left:12px;right:12px;top:calc(var(--safe-t) + 8px);background:var(--card);border-radius:18px;box-shadow:0 6px 22px rgba(20,40,70,.2);padding:10px 14px 12px;z-index:25;display:none;text-align:center}
+body.quizzing .qcard{display:block}
+.qtop{display:flex;align-items:center;justify-content:space-between}
+.qtop .qn{font-size:12px;color:var(--sub);font-weight:800}
+.qcard .quit{width:30px;height:30px;border-radius:50%;border:0;background:#f0f3f7;color:var(--sub);font-size:14px}
+.qflag{font-size:64px;line-height:1.1;margin:2px 0}
+.qcap{font-size:30px;font-weight:900;margin:6px 0 2px}
+.qask{font-size:15px;font-weight:800;color:var(--ink);margin-top:2px}
+.qask b{font-size:18px}
+.choices{position:fixed;left:12px;right:12px;bottom:calc(var(--safe-b) + 12px);z-index:25;display:none}
+body.quizzing .choices{display:block}
+body.quizzing.has-ad .choices{bottom:calc(var(--safe-b) + 68px)}
+.cgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cgrid button{border:0;border-radius:14px;padding:14px 6px;font-size:16px;font-weight:800;background:rgba(255,255,255,.97);box-shadow:0 3px 12px rgba(20,40,70,.18);color:var(--ink);min-height:54px;transition:opacity .2s,background .2s}
+.choices.n6 .cgrid button{padding:11px 6px;min-height:48px;font-size:15px}
+.cgrid button.ok{background:var(--l3);color:#fff}
+.cgrid button.ng{background:var(--bad);color:#fff}
+.cgrid button.gone{opacity:.25}
+.cgrid button:disabled:not(.ok):not(.ng):not(.gone){opacity:.7}
+.crow{display:flex;gap:8px;margin-top:8px}
+.crow button{flex:1;border:0;border-radius:14px;padding:12px;font-size:14px;font-weight:800;background:rgba(255,255,255,.9);color:var(--ink);box-shadow:0 2px 8px rgba(20,40,70,.12)}
+.crow button:disabled{opacity:.5}
+.crow .next{display:none;background:var(--accent);color:#fff;box-shadow:0 4px 0 var(--accent-d)}
+body.quizzing .zoom{bottom:auto;top:38%}
+.qtypes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.qt{border:2px solid var(--line);background:#fff;border-radius:16px;padding:10px 4px;font-size:14px;font-weight:800;color:var(--ink)}
+.qt b{display:block;font-size:26px;line-height:1.2}
+.qt.on{border-color:var(--accent);background:#f2f7ff}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:7px 11px;font-size:13px;font-weight:700;color:var(--ink)}
+.chips button.on{border-color:var(--accent);background:#eaf2ff;color:var(--accent)}
+.rlist div[data-go]{cursor:pointer}
+.btn:disabled{opacity:.5}
+
 #dlg{position:fixed;inset:0;background:rgba(18,30,45,.45);z-index:60;display:none;align-items:center;justify-content:center;padding:24px}
 #dlg.on{display:flex}
 #dlg .box{background:#fff;border-radius:18px;padding:18px;max-width:340px;width:100%}
@@ -167,11 +204,14 @@ body.playing.has-ad .hintbar{bottom:calc(var(--safe-b) + 70px)}
 
 <div class="ask" id="ask"></div>
 <div class="hintbar"><button id="hintBtn">💡 ヒント</button><button id="skipBtn">わからない</button></div>
+<div class="qcard" id="qcard"></div>
+<div class="choices" id="choices"></div>
 <div class="fb" id="fb"></div>
 
 <nav class="tabs" id="tabs">
   <button data-tab="explore" class="on"><span>🗺️</span>さがす</button>
   <button data-tab="play"><span>📍</span>場所あて</button>
+  <button data-tab="quiz"><span>🚩</span>クイズ</button>
   <button data-tab="stats"><span>📊</span>きろく</button>
   <button data-tab="settings"><span>⚙️</span>設定</button>
 </nav>
