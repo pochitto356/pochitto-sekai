@@ -23,7 +23,7 @@ workflows:
       vars:
         APP_APPLE_ID: "6824358920"
         ADMOB_APP_ID: "ca-app-pub-7792368657314009~3138669697"
-        MARKETING_VERSION: "1.0.0"
+        MARKETING_VERSION: "1.1.0"
     scripts:
       - name: npmパッケージ取得
         script: npm install
