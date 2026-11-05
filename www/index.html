@@ -170,7 +170,7 @@ body.quizzing.has-ad .choices{bottom:calc(var(--safe-b) + 68px)}
 .crow button{flex:1;border:0;border-radius:14px;padding:12px;font-size:14px;font-weight:800;background:rgba(255,255,255,.9);color:var(--ink);box-shadow:0 2px 8px rgba(20,40,70,.12)}
 .crow button:disabled{opacity:.5}
 .crow .next{display:none;background:var(--accent);color:#fff;box-shadow:0 4px 0 var(--accent-d)}
-body.quizzing .zoom{bottom:auto;top:38%}
+body.quizzing .zoom{display:none}  /* クイズ中は地図が自動で動くので＋－は出さない（答えの国名と重なるため）。指での拡大はできる */
 .qtypes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .qt{border:2px solid var(--line);background:#fff;border-radius:16px;padding:10px 4px;font-size:14px;font-weight:800;color:var(--ink)}
 .qt b{display:block;font-size:26px;line-height:1.2}

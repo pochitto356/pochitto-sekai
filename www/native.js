@@ -23,7 +23,7 @@ var Native = (function () {
   var cap = window.Capacitor;
   var inApp = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
   var plugins = {};
-  var state = { premium: false, banner: false, interstitial: false };
+  var state = { premium: false, banner: false, interstitial: false, adsReady: false, bannerWanted: false };
   try { state.premium = localStorage.getItem('st_premium') === '1'; } catch (e) {}
 
   function say() { try { console.log.apply(console, ['[native]'].concat([].slice.call(arguments))); } catch (e) {} }
@@ -75,7 +75,11 @@ var Native = (function () {
   function startAds() {
     var a = plugins.ads;
     if (!a) return Promise.resolve();
-    return a.initialize({ initializeForTesting: CONFIG.testing, maxAdContentRating: 'General' }).then(loadInterstitial);   // 年齢制限4+に合わせて一般向けの広告だけ
+    // 一般向けの広告だけ（年齢制限に合わせる）
+    return a.initialize({ initializeForTesting: CONFIG.testing, maxAdContentRating: 'General' }).then(function () {
+      state.adsReady = true; loadInterstitial();
+      if (state.bannerWanted) showBanner(true);   // 初期化前に出したかったバナーをここで出す
+    });   
   }
 
   function loadInterstitial() {
@@ -156,7 +160,8 @@ var Native = (function () {
   /* ---------- 広告 ---------- */
   function showBanner(on) {
     var a = plugins.ads;
-    if (!inApp || !a) return;
+    state.bannerWanted = !!on;
+    if (!inApp || !a || !state.adsReady) return;   // AdMobの初期化が終わるまで待つ
     if (!on || state.premium) {
       if (state.banner) { a.hideBanner().catch(function () {}); state.banner = false; }
       return;
@@ -170,7 +175,7 @@ var Native = (function () {
   function interstitial(next) {
     next = next || function () {};
     var a = plugins.ads;
-    if (!inApp || !a || state.premium || !state.interstitial) { next(); return; }
+    if (!inApp || !a || !state.adsReady || state.premium || !state.interstitial) { next(); return; }
     state.interstitial = false;
     a.showInterstitial().then(function () { loadInterstitial(); next(); })
       .catch(function () { loadInterstitial(); next(); });
@@ -182,6 +187,7 @@ var Native = (function () {
     if (state.premium) { granted(); return; }
     var a = plugins.ads;
     if (!inApp || !a) { ask(title, body + '\n（ブラウザ版では動画の代わりにこのダイアログが出ます）', granted, declined, '動画を見る'); return; }
+    if (!state.adsReady) { ask('動画を読み込めませんでした', 'しばらくしてからお試しください。', declined); return; }
     ask(title, body, function () {
       a.prepareRewardVideoAd({ adId: CONFIG.ads.rewarded, isTesting: CONFIG.testing })
         .then(function () { return a.showRewardVideoAd(); })

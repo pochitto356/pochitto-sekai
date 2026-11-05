@@ -135,16 +135,17 @@ var App = (function () {
   // 地図上の範囲 [x0,y0,x1,y1] が、上下のUIを避けた場所に収まるように動かす
   var animId = 0;
   function flyToBox(b, anim, pad, maxK) {
-    var s = screen(), top = 80, bottom = document.body.classList.contains('playing') ? 90 : 110;
+    var s = screen(), top = 80, bottom = document.body.classList.contains('playing') ? 90 : 110, left = 0, right = 0;
     if (document.body.classList.contains('has-ad')) bottom += 56;
-    if (document.body.classList.contains('quizzing')) { top = $('qcard').offsetHeight + 24; bottom = $('choices').offsetHeight + 24; }
+    // クイズ中は国名ラベルが画面の端で切れないよう、左右にも余白を取る
+    if (document.body.classList.contains('quizzing')) { top = $('qcard').offsetHeight + 24; bottom = $('choices').offsetHeight + 24; left = right = 30; }
     if ($('sheet').classList.contains('on')) bottom = Math.max(bottom, s.h * 0.45);
     pad = pad == null ? 24 : pad;
     var bw = Math.max(b[2] - b[0], 4), bh = Math.max(b[3] - b[1], 4);
-    var aw = s.w - pad * 2, ah = s.h - top - bottom - pad * 2;
+    var aw = s.w - left - right - pad * 2, ah = s.h - top - bottom - pad * 2;
     var k = Math.min(aw / bw, ah / bh);
     k = Math.max(kMin, Math.min(maxK || kMax * 0.5, k));
-    var tx = s.w / 2 - (b[0] + bw / 2) * k, ty = top + pad + ah / 2 - (b[1] + bh / 2) * k;
+    var tx = left + pad + aw / 2 - (b[0] + bw / 2) * k, ty = top + pad + ah / 2 - (b[1] + bh / 2) * k;
     var from = { k: view.k, x: view.x, y: view.y }, to = { k: k, x: tx, y: ty };
     var id = ++animId;
     if (!anim) { view.k = k; view.x = tx; view.y = ty; clampView(); applyView(); return; }
@@ -519,7 +520,10 @@ var App = (function () {
   var qset = { type: 'flag', area: 0, level: 'easy', n: 4 };
   try { Object.assign(qset, JSON.parse(localStorage.getItem('st_qset') || '{}')); } catch (e) {}
   function qpool(type, area, level) {
-    return pool(area, level).filter(function (c) {
+    var list = pool(area, level);
+    // 国旗・首都は形が小さくても有名な国（シンガポール・フィジーなど）を「やさしい」に入れる
+    if (type !== 'shape' && level === 'easy') list = list.concat(C.filter(function (c) { return c.famous && c.dot && (!area || c.reg === area); }));
+    return list.filter(function (c) {
       if (type === 'cap') return NO_CAP.indexOf(c.name) < 0 && c.cap.indexOf(c.name) !== 0;
       if (type === 'shape') return !c.dot || level === 'all';
       return true;
